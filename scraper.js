@@ -35,15 +35,26 @@ async function clickAndMaybeGetNewPage(context, page, clickFn, timeout = 8000) {
  * Devuelve { scope, locator } donde scope es la Page o el Frame donde
  * apareció, o null si no lo encontró en el tiempo dado.
  */
-async function waitForSelectorAnywhere(page, selector, timeout = 25000) {
+async function waitForSelectorAnywhere(page, selector, timeout = 25000, state = 'visible') {
   const deadline = Date.now() + timeout;
+  const checks = {
+    visible: async (loc) => loc.isVisible().catch(() => false),
+    attached: async (loc) => (await loc.count().catch(() => 0)) > 0,
+    'attached-nonempty': async (loc) => {
+      if ((await loc.count().catch(() => 0)) === 0) return false;
+      const texto = await loc.textContent().catch(() => '');
+      return !!(texto && texto.trim().length > 0);
+    },
+  };
+  const check = checks[state] || checks.visible;
+
   while (Date.now() < deadline) {
     const mainLoc = page.locator(selector).first();
-    if (await mainLoc.isVisible().catch(() => false)) return { scope: page, locator: mainLoc };
+    if (await check(mainLoc)) return { scope: page, locator: mainLoc };
 
     for (const frame of page.frames()) {
       const loc = frame.locator(selector).first();
-      if (await loc.isVisible().catch(() => false)) return { scope: frame, locator: loc };
+      if (await check(loc)) return { scope: frame, locator: loc };
     }
     await page.waitForTimeout(500);
   }
@@ -114,7 +125,15 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   const monoPage = await buscarYAbrirServicio(context, portalPage, 'Monotributo', 'Monotributo');
   await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
 
-  const encontrado = await waitForSelectorAnywhere(monoPage, '#spanFacturometroMontoMobile', NAV_TIMEOUT);
+  // El id incluye "Mobile": puede estar oculto por CSS en viewport de escritorio.
+  // Por eso esperamos que esté "attached" (presente en el DOM) en vez de "visible",
+  // y leemos con textContent, que funciona aunque el elemento esté oculto.
+  const encontrado = await waitForSelectorAnywhere(
+    monoPage,
+    '#spanFacturometroMontoMobile',
+    NAV_TIMEOUT,
+    'attached-nonempty'
+  );
 
   if (!encontrado) {
     await capturarDebug(monoPage, 'monotributo-facturometro-no-encontrado', debugArr);
@@ -124,7 +143,7 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     );
   }
 
-  const texto = await encontrado.locator.innerText();
+  const texto = await encontrado.locator.textContent();
   const monto = parseImporteArg(texto);
 
   if (monoPage !== portalPage) {
