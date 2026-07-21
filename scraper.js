@@ -240,6 +240,12 @@ async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
   const comprobantesPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
     await tarjeta.locator.click();
   });
+
+  // Mis Comprobantes tarda bastante en cargar del todo, le damos margen extra
+  await comprobantesPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+  await comprobantesPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await comprobantesPage.waitForTimeout(3000);
+
   await capturarDebug(comprobantesPage, 'mis-comprobantes-abierto', debugArr);
   return comprobantesPage;
 }
@@ -251,7 +257,7 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   const panelRecibidos = await waitForSelectorAnywhere(
     comprobantesPage,
     'div.panel-body:has(h3:text-is("Recibidos"))',
-    NAV_TIMEOUT
+    90000
   );
   if (!panelRecibidos) {
     await capturarDebug(comprobantesPage, 'panel-recibidos-no-encontrado', debugArr);
