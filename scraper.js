@@ -74,14 +74,24 @@ async function capturarDebug(page, label, debugArr) {
   }
 }
 
-async function buscarYAbrirServicio(context, portalPage, nombreServicio, textoParaClick) {
+async function buscarYAbrirServicio(context, portalPage, nombreServicio, textoParaClick, debugArr) {
   const input = portalPage.locator('#buscadorInput');
   await input.click();
   await input.fill('');
   await input.type(nombreServicio, { delay: 60 });
-  // Esperar a que aparezca la opción en el listado
-  const opcion = portalPage.locator(`p.text-muted:has-text("${textoParaClick}")`).first();
+
+  // Le damos un respiro al debounce del buscador antes de mirar los resultados,
+  // para no clickear una lista vieja (recientes/frecuentes) que todavía no
+  // se actualizó con el filtro que acabamos de tipear.
+  await portalPage.waitForTimeout(900);
+
+  if (debugArr) await capturarDebug(portalPage, `buscador-resultados-${textoParaClick}`, debugArr);
+
+  // Coincidencia EXACTA de texto (no substring) para no clickear un resultado
+  // parecido por error (ej: la descripción de otro servicio menciona la palabra).
+  const opcion = portalPage.locator(`p.small.text-muted:text-is("${textoParaClick}")`).first();
   await opcion.waitFor({ state: 'visible', timeout: 15000 });
+  await opcion.scrollIntoViewIfNeeded().catch(() => {});
 
   const servicioPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
     await opcion.click();
@@ -122,15 +132,30 @@ async function obtenerNombreCliente(portalPage) {
 }
 
 async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
-  const monoPage = await buscarYAbrirServicio(context, portalPage, 'Monotributo', 'Monotributo');
+  const monoPage = await buscarYAbrirServicio(context, portalPage, 'Monotributo', 'Monotributo', debugArr);
   await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
+
+  // Antes de que aparezca el monto hay que clickear "Recategorizarme"
+  // (dispara un __doPostBack de ASP.NET, puede recargar la página)
+  const botonRecategorizar = await waitForSelectorAnywhere(monoPage, '#bBtn1', NAV_TIMEOUT, 'visible');
+  if (!botonRecategorizar) {
+    await capturarDebug(monoPage, 'boton-recategorizarme-no-encontrado', debugArr);
+    if (monoPage !== portalPage) await monoPage.close().catch(() => {});
+    throw new Error(`No se encontró el botón #bBtn1 "Recategorizarme" (url: ${monoPage.url()}). Revisar screenshot de debug.`);
+  }
+
+  await Promise.all([
+    monoPage.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {}),
+    botonRecategorizar.locator.click(),
+  ]);
+  await capturarDebug(monoPage, 'monotributo-post-recategorizarme', debugArr);
 
   // El id incluye "Mobile": puede estar oculto por CSS en viewport de escritorio.
   // Por eso esperamos que esté "attached" (presente en el DOM) en vez de "visible",
   // y leemos con textContent, que funciona aunque el elemento esté oculto.
   const encontrado = await waitForSelectorAnywhere(
     monoPage,
-    '#spanFacturometroMontoMobile',
+    '#spanMontoCalculado',
     NAV_TIMEOUT,
     'attached-nonempty'
   );
@@ -139,7 +164,7 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     await capturarDebug(monoPage, 'monotributo-facturometro-no-encontrado', debugArr);
     if (monoPage !== portalPage) await monoPage.close().catch(() => {});
     throw new Error(
-      `No se encontró #spanFacturometroMontoMobile en Monotributo (url: ${monoPage.url()}). Revisar screenshot de debug.`
+      `No se encontró #spanMontoCalculado en Monotributo (url: ${monoPage.url()}). Revisar screenshot de debug.`
     );
   }
 
@@ -176,7 +201,7 @@ async function sumarComprobantesEnPaginaActual(page) {
 }
 
 async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
-  const comprobantesPage = await buscarYAbrirServicio(context, portalPage, 'Mis Comprobantes', 'Mis Comprobantes');
+  const comprobantesPage = await buscarYAbrirServicio(context, portalPage, 'Mis Comprobantes', 'Mis Comprobantes', debugArr);
   await capturarDebug(comprobantesPage, 'mis-comprobantes-abierto', debugArr);
 
   // Click en "Recibidos"
