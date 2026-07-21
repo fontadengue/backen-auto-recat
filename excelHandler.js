@@ -84,6 +84,13 @@ function buildZipBuffer(resultados) {
 
       const buf = buildClientExcelBuffer(resultado);
       archive.append(buf, { name: `${safeName} - ${resultado.cuit}.xlsx` });
+
+      if (Array.isArray(resultado.debug)) {
+        resultado.debug.forEach((shot, i) => {
+          const nombreArchivo = `debug/${resultado.cuit}/${String(i).padStart(2, '0')}-${shot.label}.png`;
+          archive.append(shot.buffer, { name: nombreArchivo });
+        });
+      }
     });
 
     archive.finalize();

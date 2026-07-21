@@ -28,6 +28,41 @@ async function clickAndMaybeGetNewPage(context, page, clickFn, timeout = 8000) {
   return page;
 }
 
+/**
+ * Busca un selector tanto en la página principal como dentro de cualquier
+ * iframe que tenga (muchos servicios de AFIP se cargan embebidos en un
+ * iframe dentro de la misma pestaña, en vez de abrir una pestaña nueva).
+ * Devuelve { scope, locator } donde scope es la Page o el Frame donde
+ * apareció, o null si no lo encontró en el tiempo dado.
+ */
+async function waitForSelectorAnywhere(page, selector, timeout = 25000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const mainLoc = page.locator(selector).first();
+    if (await mainLoc.isVisible().catch(() => false)) return { scope: page, locator: mainLoc };
+
+    for (const frame of page.frames()) {
+      const loc = frame.locator(selector).first();
+      if (await loc.isVisible().catch(() => false)) return { scope: frame, locator: loc };
+    }
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+/**
+ * Guarda un screenshot en el array de debug del resultado, con un label
+ * descriptivo. Nunca lanza error (si falla el screenshot, sigue de largo).
+ */
+async function capturarDebug(page, label, debugArr) {
+  try {
+    const buffer = await page.screenshot({ fullPage: true, timeout: 8000 });
+    debugArr.push({ label, buffer, url: page.url() });
+  } catch (_) {
+    // si no se puede sacar el screenshot, no interrumpe el flujo
+  }
+}
+
 async function buscarYAbrirServicio(context, portalPage, nombreServicio, textoParaClick) {
   const input = portalPage.locator('#buscadorInput');
   await input.click();
@@ -75,12 +110,21 @@ async function obtenerNombreCliente(portalPage) {
   return nombre.trim();
 }
 
-async function obtenerFacturacionMonotributo(context, portalPage) {
+async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   const monoPage = await buscarYAbrirServicio(context, portalPage, 'Monotributo', 'Monotributo');
+  await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
 
-  const facturometro = monoPage.locator('#spanFacturometroMontoMobile');
-  await facturometro.waitFor({ state: 'visible', timeout: NAV_TIMEOUT });
-  const texto = await facturometro.innerText();
+  const encontrado = await waitForSelectorAnywhere(monoPage, '#spanFacturometroMontoMobile', NAV_TIMEOUT);
+
+  if (!encontrado) {
+    await capturarDebug(monoPage, 'monotributo-facturometro-no-encontrado', debugArr);
+    if (monoPage !== portalPage) await monoPage.close().catch(() => {});
+    throw new Error(
+      `No se encontró #spanFacturometroMontoMobile en Monotributo (url: ${monoPage.url()}). Revisar screenshot de debug.`
+    );
+  }
+
+  const texto = await encontrado.locator.innerText();
   const monto = parseImporteArg(texto);
 
   if (monoPage !== portalPage) {
@@ -112,17 +156,31 @@ async function sumarComprobantesEnPaginaActual(page) {
   return acumulado;
 }
 
-async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas) {
+async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
   const comprobantesPage = await buscarYAbrirServicio(context, portalPage, 'Mis Comprobantes', 'Mis Comprobantes');
+  await capturarDebug(comprobantesPage, 'mis-comprobantes-abierto', debugArr);
 
   // Click en "Recibidos"
-  const recibidos = comprobantesPage.locator('div.panel-body:has(h3:text-is("Recibidos"))').first();
-  await recibidos.waitFor({ state: 'visible', timeout: NAV_TIMEOUT });
-  await recibidos.click();
+  const panelRecibidos = await waitForSelectorAnywhere(
+    comprobantesPage,
+    'div.panel-body:has(h3:text-is("Recibidos"))',
+    NAV_TIMEOUT
+  );
+  if (!panelRecibidos) {
+    await capturarDebug(comprobantesPage, 'panel-recibidos-no-encontrado', debugArr);
+    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+    throw new Error(`No se encontró el panel "Recibidos" (url: ${comprobantesPage.url()}). Revisar screenshot de debug.`);
+  }
+  await panelRecibidos.locator.click();
 
   // Filtro de fecha
-  const fechaInput = comprobantesPage.locator('#fechaEmision');
-  await fechaInput.waitFor({ state: 'visible', timeout: NAV_TIMEOUT });
+  const fechaEncontrado = await waitForSelectorAnywhere(comprobantesPage, '#fechaEmision', NAV_TIMEOUT);
+  if (!fechaEncontrado) {
+    await capturarDebug(comprobantesPage, 'filtro-fecha-no-encontrado', debugArr);
+    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+    throw new Error(`No se encontró #fechaEmision (url: ${comprobantesPage.url()}). Revisar screenshot de debug.`);
+  }
+  const fechaInput = fechaEncontrado.locator;
   await fechaInput.click();
   await fechaInput.fill('');
   await fechaInput.type(rangoFechas, { delay: 30 });
@@ -175,13 +233,23 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas) {
  */
 async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_RANGE) {
   const context = await browser.newContext();
-  const resultado = { cuit, nombre: '', facturacionMonotributo: null, comprobantesRecibidos: null, error: null };
+  const debug = [];
+  const resultado = {
+    cuit,
+    nombre: '',
+    facturacionMonotributo: null,
+    comprobantesRecibidos: null,
+    error: null,
+    debug,
+  };
 
   try {
     const portalPage = await login(context, cuit, clave);
+    await capturarDebug(portalPage, 'post-login-portal', debug);
+
     resultado.nombre = await obtenerNombreCliente(portalPage);
-    resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage);
-    resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas);
+    resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage, debug);
+    resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
   } catch (err) {
     resultado.error = err.message || String(err);
   } finally {
