@@ -146,10 +146,24 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     throw new Error(`No se encontró el botón "Ingresar" de Monotributo en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
   }
 
+  await botonIngresar.locator.scrollIntoViewIfNeeded().catch(() => {});
+  const urlAntesDelClick = portalPage.url();
   const monoPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
     await botonIngresar.locator.click();
-  });
+  }, 20000);
+
+  if (monoPage === portalPage) {
+    // No se abrió pestaña nueva: puede haber navegado en la misma pestaña,
+    // le damos un margen para que termine de cargar.
+    await portalPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
   await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
+
+  if (monoPage === portalPage && portalPage.url() === urlAntesDelClick) {
+    throw new Error(
+      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}). Revisar screenshot de debug "monotributo-abierto".`
+    );
+  }
 
   // Antes de que aparezca el monto hay que clickear "Recategorizarme"
   // (dispara un __doPostBack de ASP.NET, puede recargar la página)
