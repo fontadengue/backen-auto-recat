@@ -216,9 +216,36 @@ async function sumarComprobantesEnPaginaActual(page) {
   return acumulado;
 }
 
-async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
-  const comprobantesPage = await buscarYAbrirServicio(context, portalPage, 'Mis Comprobantes', 'Mis Comprobantes', debugArr);
+async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
+  const verTodos = await waitForSelectorAnywhere(portalPage, 'a:text-is("Ver todos")', NAV_TIMEOUT, 'visible');
+  if (!verTodos) {
+    await capturarDebug(portalPage, 'link-ver-todos-no-encontrado', debugArr);
+    throw new Error(`No se encontró el link "Ver todos" en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+  }
+  await verTodos.locator.click();
+  await portalPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await capturarDebug(portalPage, 'mis-servicios-listado', debugArr);
+
+  const tarjeta = await waitForSelectorAnywhere(
+    portalPage,
+    'div.media:has(h3:text-is("MIS COMPROBANTES"))',
+    NAV_TIMEOUT,
+    'visible'
+  );
+  if (!tarjeta) {
+    await capturarDebug(portalPage, 'tarjeta-mis-comprobantes-no-encontrada', debugArr);
+    throw new Error(`No se encontró la tarjeta "MIS COMPROBANTES" en /mis-servicios (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+  }
+
+  const comprobantesPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
+    await tarjeta.locator.click();
+  });
   await capturarDebug(comprobantesPage, 'mis-comprobantes-abierto', debugArr);
+  return comprobantesPage;
+}
+
+async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
+  const comprobantesPage = await abrirMisComprobantesDesdePortal(context, portalPage, debugArr);
 
   // Click en "Recibidos"
   const panelRecibidos = await waitForSelectorAnywhere(
