@@ -137,7 +137,7 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   // pestaña del sistema de Monotributo.
   const botonIngresar = await waitForSelectorAnywhere(
     portalPage,
-    'button.btn-primary.btn-breakline:text-is("Ingresar")',
+    'div.media:has(h4.title:text-is("Recategorización")) button.btn-primary.btn-breakline:text-is("Ingresar")',
     NAV_TIMEOUT,
     'visible'
   );
