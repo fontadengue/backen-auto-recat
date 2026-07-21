@@ -231,8 +231,8 @@ async function sumarComprobantesEnPaginaActual(page) {
     }
     console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importe=${importe} signo=${signo}`);
   }
-  console.log(`  subtotal de la página: ${acumulado}`);
-  return acumulado;
+  console.log(`  subtotal de la página: ${acumulado} (${total} filas)`);
+  return { subtotal: acumulado, filas: total };
 }
 
 async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
@@ -352,11 +352,14 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   }
 
   let total = 0;
+  let filasTotales = 0;
   let pagina = 1;
   const MAX_PAGINAS = 200; // salvaguarda contra loops infinitos
 
   while (pagina <= MAX_PAGINAS) {
-    total += await sumarComprobantesEnPaginaActual(comprobantesPage);
+    const { subtotal, filas } = await sumarComprobantesEnPaginaActual(comprobantesPage);
+    total += subtotal;
+    filasTotales += filas;
 
     const siguiente = comprobantesPage.locator('a[aria-controls="tablaDataTables"]:has-text("»")').first();
     const contenedorLi = siguiente.locator('xpath=..');
@@ -369,6 +372,20 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     await esperarProcesamientoTabla(comprobantesPage);
     await comprobantesPage.locator('#tablaDataTables tbody tr').first().waitFor({ state: 'visible', timeout: 60000 }).catch(() => {});
     pagina++;
+  }
+
+  await capturarDebug(comprobantesPage, `resultado-final-${filasTotales}-filas`, debugArr);
+
+  if (filasTotales === 0) {
+    // Un total de 0 sin ninguna fila leída es sospechoso: puede ser que el
+    // cliente realmente no tenga comprobantes en el rango, o puede ser que
+    // el filtro de fecha o la búsqueda hayan fallado silenciosamente.
+    // Preferimos marcarlo como error para revisión manual antes que cargar
+    // un 0 que parezca un dato confiable sin serlo.
+    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+    throw new Error(
+      'No se encontró NINGUNA fila de comprobantes en el rango de fechas. Puede ser que el cliente realmente no tenga comprobantes, o que el filtro de fecha/búsqueda haya fallado. Revisar screenshot "resultado-final-0-filas" antes de confiar en este dato.'
+    );
   }
 
   if (comprobantesPage !== portalPage) {
