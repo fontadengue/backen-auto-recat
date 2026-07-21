@@ -267,10 +267,16 @@ async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
 async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
   const comprobantesPage = await abrirMisComprobantesDesdePortal(context, portalPage, debugArr);
 
-  // Click en "Recibidos"
+  // Esta app (fes.afip.gob.ar) es lenta para cargar, le damos margen extra
+  // antes de buscar el panel "Recibidos".
+  await comprobantesPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+  await comprobantesPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await comprobantesPage.waitForTimeout(2500);
+
+  // Click en "Recibidos": el ícono de archivo + flecha hacia abajo dentro del panel-heading
   const panelRecibidos = await waitForSelectorAnywhere(
     comprobantesPage,
-    'div.panel-body:has(h3:text-is("Recibidos"))',
+    'div.panel-heading:has(i.fa-file):has(i.fa-chevron-down)',
     90000
   );
   if (!panelRecibidos) {
@@ -279,9 +285,11 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     throw new Error(`No se encontró el panel "Recibidos" (url: ${comprobantesPage.url()}). Revisar screenshot de debug.`);
   }
   await panelRecibidos.locator.click();
+  await comprobantesPage.waitForTimeout(2000);
+  await capturarDebug(comprobantesPage, 'post-click-recibidos', debugArr);
 
   // Filtro de fecha
-  const fechaEncontrado = await waitForSelectorAnywhere(comprobantesPage, '#fechaEmision', NAV_TIMEOUT);
+  const fechaEncontrado = await waitForSelectorAnywhere(comprobantesPage, '#fechaEmision', 60000);
   if (!fechaEncontrado) {
     await capturarDebug(comprobantesPage, 'filtro-fecha-no-encontrado', debugArr);
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
@@ -289,23 +297,34 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   }
   const fechaInput = fechaEncontrado.locator;
   await fechaInput.click();
+  await comprobantesPage.waitForTimeout(500);
   await fechaInput.fill('');
-  await fechaInput.type(rangoFechas, { delay: 30 });
+  await comprobantesPage.waitForTimeout(500);
+  await fechaInput.type(rangoFechas, { delay: 60 });
+  await comprobantesPage.waitForTimeout(1000);
+  await capturarDebug(comprobantesPage, 'fecha-completada', debugArr);
 
   await comprobantesPage.locator('button.applyBtn.btn-success').click();
+  await comprobantesPage.waitForTimeout(1500);
+
   await comprobantesPage.locator('#buscarComprobantes').click();
+  await comprobantesPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await comprobantesPage.waitForTimeout(2000);
 
   // Esperar a que cargue la tabla
-  await comprobantesPage.locator('#tablaDataTables').waitFor({ state: 'visible', timeout: NAV_TIMEOUT });
+  await comprobantesPage.locator('#tablaDataTables').waitFor({ state: 'visible', timeout: 60000 });
+  await comprobantesPage.waitForTimeout(1500);
+  await capturarDebug(comprobantesPage, 'tabla-comprobantes-cargada', debugArr);
 
   // Cambiar a 50 resultados por página
   const selectorCantidad = comprobantesPage.locator('span:has-text("5")').first();
   if (await selectorCantidad.isVisible().catch(() => false)) {
     await selectorCantidad.click();
+    await comprobantesPage.waitForTimeout(800);
     const opcion50 = comprobantesPage.locator('a:text-is("50")').first();
     if (await opcion50.isVisible().catch(() => false)) {
       await opcion50.click();
-      await comprobantesPage.waitForTimeout(1500); // esperar recarga de tabla
+      await comprobantesPage.waitForTimeout(2500); // esperar recarga de tabla
     }
   }
 
@@ -323,7 +342,7 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     if (estaDeshabilitado) break;
 
     await siguiente.click();
-    await comprobantesPage.waitForTimeout(1200); // esperar recarga de la tabla
+    await comprobantesPage.waitForTimeout(2500); // esperar recarga de la tabla, con paciencia
     pagina++;
   }
 
