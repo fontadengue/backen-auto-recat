@@ -216,17 +216,22 @@ async function sumarComprobantesEnPaginaActual(page) {
   for (let i = 0; i < total; i++) {
     const fila = filas.nth(i);
     const celdas = fila.locator('td');
-    const tipoTexto = (await celdas.nth(0).innerText().catch(() => '')).toLowerCase();
+    const tipoTexto = (await celdas.nth(1).innerText().catch(() => '')).toLowerCase();
     // El importe suele estar en una celda con class="alignRight" y span.moneda
     const importeTexto = await fila.locator('td.alignRight').first().innerText().catch(() => '0');
     const importe = parseImporteArg(importeTexto);
 
+    let signo = 0;
     if (tipoTexto.includes('nota de cr')) {
       acumulado -= importe;
+      signo = -1;
     } else if (tipoTexto.includes('factura') || tipoTexto.includes('nota de d')) {
       acumulado += importe;
+      signo = 1;
     }
+    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importe=${importe} signo=${signo}`);
   }
+  console.log(`  subtotal de la página: ${acumulado}`);
   return acumulado;
 }
 
@@ -328,12 +333,22 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   if (await iconoBarras.isVisible().catch(() => false)) {
     await iconoBarras.click();
     const opcion50 = comprobantesPage.locator('li.button-page-length a:text-is("50")').first();
-    await opcion50.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-    if (await opcion50.isVisible().catch(() => false)) {
+    const dropdownAbierto = await opcion50.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
+    await capturarDebug(comprobantesPage, 'selector-cantidad-abierto', debugArr);
+
+    if (dropdownAbierto) {
       await opcion50.click();
       await esperarProcesamientoTabla(comprobantesPage);
       await comprobantesPage.locator('#tablaDataTables tbody tr').first().waitFor({ state: 'visible', timeout: 60000 });
+      await capturarDebug(comprobantesPage, 'tabla-50-aplicado', debugArr);
+    } else {
+      // No se pudo confirmar el dropdown de cantidad; seguimos igual, la
+      // paginación con "»" va a recorrer todas las páginas de todos modos,
+      // solo que con más páginas (más lento, no incorrecto).
+      await capturarDebug(comprobantesPage, 'selector-cantidad-no-confirmado', debugArr);
     }
+  } else {
+    await capturarDebug(comprobantesPage, 'icono-bars-no-encontrado', debugArr);
   }
 
   let total = 0;
