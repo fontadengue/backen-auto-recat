@@ -132,7 +132,23 @@ async function obtenerNombreCliente(portalPage) {
 }
 
 async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
-  const monoPage = await buscarYAbrirServicio(context, portalPage, 'Monotributo', 'Monotributo', debugArr);
+  // Ya no se busca "Monotributo" por el buscador: hay un botón "Ingresar"
+  // directo en el home del portal (tarjeta de Monotributo) que abre la
+  // pestaña del sistema de Monotributo.
+  const botonIngresar = await waitForSelectorAnywhere(
+    portalPage,
+    'button.btn-primary.btn-breakline:text-is("Ingresar")',
+    NAV_TIMEOUT,
+    'visible'
+  );
+  if (!botonIngresar) {
+    await capturarDebug(portalPage, 'boton-ingresar-monotributo-no-encontrado', debugArr);
+    throw new Error(`No se encontró el botón "Ingresar" de Monotributo en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+  }
+
+  const monoPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
+    await botonIngresar.locator.click();
+  });
   await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
 
   // Antes de que aparezca el monto hay que clickear "Recategorizarme"
