@@ -337,9 +337,25 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
   }
 
+  // Puede estar deshabilitado hasta que termine de calcular la deuda;
+  // esperamos a que quede habilitado antes de clickear.
+  const deadlineHabilitado = Date.now() + 30000;
+  let habilitado = await botonVolante.locator.isEnabled().catch(() => false);
+  while (!habilitado && Date.now() < deadlineHabilitado) {
+    await ccmaPage.waitForTimeout(500);
+    habilitado = await botonVolante.locator.isEnabled().catch(() => false);
+  }
+  await capturarDebug(ccmaPage, `ccma-antes-de-click-volante-habilitado-${habilitado}`, debugArr);
+  if (!habilitado) {
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(
+      `El botón "VOLANTE DE PAGO" nunca quedó habilitado (url: ${ccmaPage.url()}). Revisar screenshot "ccma-antes-de-click-volante-habilitado-false".`
+    );
+  }
+
   await botonVolante.locator.scrollIntoViewIfNeeded().catch(() => {});
   const volantePage = await clickAndMaybeGetNewPage(context, ccmaPage, async () => {
-    await botonVolante.locator.click();
+    await botonVolante.locator.click({ force: true });
   }, 20000);
 
   await volantePage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
