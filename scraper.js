@@ -235,7 +235,7 @@ async function sumarComprobantesEnPaginaActual(page) {
   return { subtotal: acumulado, filas: total };
 }
 
-async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
+async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta, debugArr) {
   const verTodos = await waitForSelectorAnywhere(portalPage, 'a:text-is("Ver todos")', NAV_TIMEOUT, 'visible');
   if (!verTodos) {
     await capturarDebug(portalPage, 'link-ver-todos-no-encontrado', debugArr);
@@ -247,25 +247,137 @@ async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
 
   const tarjeta = await waitForSelectorAnywhere(
     portalPage,
-    'div.media:has(h3:text-is("MIS COMPROBANTES"))',
+    `div.media:has(h3:text-is("${tituloTarjeta}"))`,
     NAV_TIMEOUT,
     'visible'
   );
   if (!tarjeta) {
-    await capturarDebug(portalPage, 'tarjeta-mis-comprobantes-no-encontrada', debugArr);
-    throw new Error(`No se encontró la tarjeta "MIS COMPROBANTES" en /mis-servicios (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+    await capturarDebug(portalPage, `tarjeta-no-encontrada-${tituloTarjeta}`, debugArr);
+    throw new Error(`No se encontró la tarjeta "${tituloTarjeta}" en /mis-servicios (url: ${portalPage.url()}). Revisar screenshot de debug.`);
   }
 
-  const comprobantesPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
+  const servicioPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
     await tarjeta.locator.click();
   });
 
-  // Mis Comprobantes tarda en cargar del todo; esperamos a que la red se
+  // Estas apps suelen tardar en cargar del todo; esperamos a que la red se
   // calme (detección), no un tiempo fijo arbitrario.
-  await comprobantesPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
-  await comprobantesPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await servicioPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+  await servicioPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
 
-  return comprobantesPage;
+  return servicioPage;
+}
+
+const TITULO_CCMA = "CCMA - CUENTA CORRIENTE DE CONTRIBUYENTES MONOTRIBUTISTAS Y AUTONOMOS";
+
+async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
+  return abrirServicioDesdeMisServicios(context, portalPage, 'MIS COMPROBANTES', debugArr);
+}
+
+async function obtenerDeudaCCMA(context, portalPage, debugArr) {
+  const ccmaPage = await abrirServicioDesdeMisServicios(context, portalPage, TITULO_CCMA, debugArr);
+  await capturarDebug(ccmaPage, 'ccma-abierto', debugArr);
+
+  // Borrar el período y cargar 01/2004
+  const perInput = await waitForSelectorAnywhere(ccmaPage, 'input[name="perdesde2"]', 60000, 'visible');
+  if (!perInput) {
+    await capturarDebug(ccmaPage, 'ccma-input-periodo-no-encontrado', debugArr);
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(`No se encontró el input de período (perdesde2) en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+  }
+  await perInput.locator.click();
+  await perInput.locator.fill('');
+  await perInput.locator.type('01/2004', { delay: 40 });
+  await capturarDebug(ccmaPage, 'ccma-periodo-cargado', debugArr);
+
+  // Click en "CALCULO DE DEUDA"
+  const botonCalculo = await waitForSelectorAnywhere(ccmaPage, 'input[name="CalDeud"]', 30000, 'visible');
+  if (!botonCalculo) {
+    await capturarDebug(ccmaPage, 'ccma-boton-calculo-no-encontrado', debugArr);
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(`No se encontró el botón "CALCULO DE DEUDA" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+  }
+  await botonCalculo.locator.click();
+
+  // Esperar a que cargue la página de resultados
+  await ccmaPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+  await ccmaPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await capturarDebug(ccmaPage, 'ccma-calculo-deuda-cargado', debugArr);
+
+  // Si no aparece la sección de Monotributo - Obligaciones, el cliente no
+  // tiene deuda de monotributo: deuda CCMA = 0, sin marcar error.
+  const filaObligaciones = await waitForSelectorAnywhere(
+    ccmaPage,
+    'tr:has-text("MONOTRIBUTO - OBLIGACIONES")',
+    20000,
+    'attached'
+  );
+  if (!filaObligaciones) {
+    await capturarDebug(ccmaPage, 'ccma-sin-monotributo', debugArr);
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    return 0;
+  }
+
+  // Click en "VOLANTE DE PAGO"
+  const botonVolante = await waitForSelectorAnywhere(ccmaPage, 'input[name="GENVOL"]', 30000, 'visible');
+  if (!botonVolante) {
+    await capturarDebug(ccmaPage, 'ccma-boton-volante-no-encontrado', debugArr);
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+  }
+
+  const volantePage = await clickAndMaybeGetNewPage(context, ccmaPage, async () => {
+    await botonVolante.locator.click();
+  }, 20000);
+  await volantePage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+  await volantePage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await capturarDebug(volantePage, 'ccma-volante-abierto', debugArr);
+
+  // Seleccionar todos en Monotributo - Obligaciones
+  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
+  if (linkMC) {
+    await linkMC.locator.click();
+  } else {
+    await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
+  }
+
+  // Seleccionar todos en Monotributo - Intereses (puede no existir si no hay intereses)
+  const linkMI = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MI\')"]', 15000, 'visible');
+  if (linkMI) {
+    await linkMI.locator.click();
+  }
+
+  // Click en "GENERAR VEP O QR"
+  const botonVEP = await waitForSelectorAnywhere(volantePage, '#GenerarVEP', 30000, 'visible');
+  if (!botonVEP) {
+    await capturarDebug(volantePage, 'ccma-boton-generar-vep-no-encontrado', debugArr);
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
+    throw new Error(`No se encontró el botón "GENERAR VEP O QR" (url: ${volantePage.url()}). Revisar screenshot de debug.`);
+  }
+  await botonVEP.locator.click();
+
+  // Leer el importe total a pagar
+  const importeEncontrado = await waitForSelectorAnywhere(
+    volantePage,
+    'div:has(strong:has-text("Importe Total a pagar"))',
+    60000,
+    'attached-nonempty'
+  );
+  await capturarDebug(volantePage, 'ccma-importe-total', debugArr);
+
+  let monto = 0;
+  if (importeEncontrado) {
+    const texto = await importeEncontrado.locator.textContent();
+    monto = parseImporteArg(texto);
+  } else {
+    await capturarDebug(volantePage, 'ccma-importe-no-encontrado', debugArr);
+  }
+
+  if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
+  if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+
+  return monto;
 }
 
 async function esperarProcesamientoTabla(page, timeout = 20000) {
@@ -399,14 +511,16 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
  * Procesa un cliente completo: login, monotributo, mis comprobantes.
  * Devuelve un objeto resultado, nunca lanza (captura errores internamente).
  */
-async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_RANGE) {
+async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_RANGE, numeroCliente = '') {
   const context = await browser.newContext();
   const debug = [];
   const resultado = {
     cuit,
+    numeroCliente,
     nombre: '',
     facturacionMonotributo: null,
     comprobantesRecibidos: null,
+    deudaCCMA: null,
     error: null,
     debug,
   };
@@ -418,6 +532,7 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
     resultado.nombre = await obtenerNombreCliente(portalPage);
     resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage, debug);
     resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
+    resultado.deudaCCMA = await obtenerDeudaCCMA(context, portalPage, debug);
   } catch (err) {
     resultado.error = err.message || String(err);
   } finally {
@@ -435,8 +550,8 @@ async function procesarClientes(clientes, onProgress, rangoFechas) {
   const resultados = [];
   try {
     for (let i = 0; i < clientes.length; i++) {
-      const { cuit, clave } = clientes[i];
-      const resultado = await procesarCliente(browser, cuit, clave, rangoFechas);
+      const { cuit, clave, numeroCliente } = clientes[i];
+      const resultado = await procesarCliente(browser, cuit, clave, rangoFechas, numeroCliente);
       resultados.push(resultado);
       if (onProgress) onProgress({ index: i + 1, total: clientes.length, resultado });
 

@@ -95,6 +95,7 @@ app.get('/status/:jobId', checkApiKey, (req, res) => {
     error: job.error,
     resultados: job.resultados.map((r) => ({
       cuit: r.cuit,
+      numeroCliente: r.numeroCliente,
       nombre: r.nombre,
       error: r.error,
     })),

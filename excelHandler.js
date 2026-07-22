@@ -18,10 +18,11 @@ function readInputExcel(buffer) {
   for (const row of rows) {
     const cuitRaw = String(row[0] ?? '').trim();
     const clave = String(row[1] ?? '').trim();
+    const numeroCliente = String(row[2] ?? '').trim();
     const cuitDigits = cuitRaw.replace(/\D/g, '');
 
     if (cuitDigits.length === 11 && clave) {
-      clientes.push({ cuit: cuitDigits, clave });
+      clientes.push({ cuit: cuitDigits, clave, numeroCliente });
     }
   }
   return clientes;
@@ -34,16 +35,20 @@ function buildClientExcelBuffer(resultado) {
   const {
     nombre,
     cuit,
+    numeroCliente,
     facturacionMonotributo,
     comprobantesRecibidos,
+    deudaCCMA,
     error,
   } = resultado;
 
   const data = [
+    ['Número de Cliente', numeroCliente || ''],
     ['Cliente', nombre || ''],
     ['CUIT', cuit],
     ['Facturación Monotributo (Facturómetro)', facturacionMonotributo ?? ''],
     ['Comprobantes Recibidos (Facturas + N. Débito - N. Crédito)', comprobantesRecibidos ?? ''],
+    ['Deuda CCMA', deudaCCMA ?? ''],
     ['Fecha de proceso', new Date().toLocaleString('es-AR')],
   ];
 
@@ -77,10 +82,13 @@ function buildZipBuffer(resultados) {
     archive.pipe(stream);
 
     resultados.forEach((resultado, idx) => {
-      const safeName = (resultado.nombre || `cliente_${resultado.cuit}`)
+      const nombreBase = (resultado.nombre || `cliente_${resultado.cuit}`)
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-zA-Z0-9 _-]/g, '')
         .trim() || `cliente_${idx + 1}`;
+
+      const prefijo = resultado.numeroCliente ? `${resultado.numeroCliente} - ` : '';
+      const safeName = `${prefijo}${nombreBase}`;
 
       const buf = buildClientExcelBuffer(resultado);
       archive.append(buf, { name: `${safeName} - ${resultado.cuit}.xlsx` });
