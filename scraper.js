@@ -212,27 +212,34 @@ async function sumarComprobantesEnPaginaActual(page) {
   const filas = page.locator('#tablaDataTables tbody tr');
   const total = await filas.count();
   let acumulado = 0;
+  let categorizadas = 0;
+  let importeNoParseado = 0;
 
   for (let i = 0; i < total; i++) {
     const fila = filas.nth(i);
     const celdas = fila.locator('td');
     const tipoTexto = (await celdas.nth(1).innerText().catch(() => '')).toLowerCase();
     // El importe suele estar en una celda con class="alignRight" y span.moneda
-    const importeTexto = await fila.locator('td.alignRight').first().innerText().catch(() => '0');
+    const importeTexto = await fila.locator('td.alignRight').first().innerText().catch(() => '');
     const importe = parseImporteArg(importeTexto);
+    if (importeTexto.trim() && importe === 0 && !/^[\s$.,0]*$/.test(importeTexto)) {
+      importeNoParseado++;
+    }
 
     let signo = 0;
     if (tipoTexto.includes('nota de cr')) {
       acumulado -= importe;
       signo = -1;
+      categorizadas++;
     } else if (tipoTexto.includes('factura') || tipoTexto.includes('nota de d')) {
       acumulado += importe;
       signo = 1;
+      categorizadas++;
     }
-    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importe=${importe} signo=${signo}`);
+    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importeTexto="${importeTexto.trim()}" importe=${importe} signo=${signo}`);
   }
-  console.log(`  subtotal de la página: ${acumulado} (${total} filas)`);
-  return { subtotal: acumulado, filas: total };
+  console.log(`  subtotal de la página: ${acumulado} (${total} filas, ${categorizadas} categorizadas, ${importeNoParseado} importes sin parsear bien)`);
+  return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado };
 }
 
 async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta, debugArr) {
@@ -330,20 +337,41 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
   }
 
+  const urlAntesDeVolante = ccmaPage.url();
   const volantePage = await clickAndMaybeGetNewPage(context, ccmaPage, async () => {
     await botonVolante.locator.click();
   }, 20000);
+
+  if (volantePage === ccmaPage) {
+    // No se abrió pestaña nueva: puede haber navegado en la misma pestaña,
+    // le damos margen a que termine de cargar antes de decidir si falló.
+    await ccmaPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+  }
   await volantePage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
   await volantePage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await capturarDebug(volantePage, 'ccma-volante-abierto', debugArr);
 
-  // Seleccionar todos en Monotributo - Obligaciones
-  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
-  if (linkMC) {
-    await linkMC.locator.click();
-  } else {
-    await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
+  if (volantePage === ccmaPage && volantePage.url() === urlAntesDeVolante) {
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(
+      `El click en "VOLANTE DE PAGO" no abrió pestaña nueva ni navegó (sigue en ${ccmaPage.url()}). Revisar screenshot "ccma-volante-abierto".`
+    );
   }
+
+  // Seleccionar todos en Monotributo - Obligaciones. Si no aparece este link
+  // acá, algo salió mal con la navegación (no es un caso válido de "sin
+  // monotributo", porque ya confirmamos antes que existía la fila de
+  // obligaciones en la página anterior) — lo tratamos como error, no como 0.
+  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
+  if (!linkMC) {
+    await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
+    if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(
+      `No se encontró el link "Seleccionar todos" de Monotributo Obligaciones en el volante de pago (url: ${volantePage.url()}). Revisar screenshot "ccma-link-mc-no-encontrado".`
+    );
+  }
+  await linkMC.locator.click();
 
   // Seleccionar todos en Monotributo - Intereses (puede no existir si no hay intereses)
   const linkMI = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MI\')"]', 15000, 'visible');
@@ -370,13 +398,16 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   );
   await capturarDebug(volantePage, 'ccma-importe-total', debugArr);
 
-  let monto = 0;
-  if (importeEncontrado) {
-    const texto = await importeEncontrado.locator.textContent();
-    monto = parseImporteArg(texto);
-  } else {
+  if (!importeEncontrado) {
     await capturarDebug(volantePage, 'ccma-importe-no-encontrado', debugArr);
+    if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    throw new Error(
+      `No se encontró el "Importe Total a pagar" después de Generar VEP (url: ${volantePage.url()}). Revisar screenshot "ccma-importe-no-encontrado" — no confiar en un 0 acá, hay que revisar qué pasó.`
+    );
   }
+  const texto = await importeEncontrado.locator.textContent();
+  const monto = parseImporteArg(texto);
 
   if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
   if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
@@ -469,13 +500,19 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
 
   let total = 0;
   let filasTotales = 0;
+  let categorizadasTotales = 0;
   let pagina = 1;
   const MAX_PAGINAS = 200; // salvaguarda contra loops infinitos
 
+  async function fingerprintPrimeraFila() {
+    return comprobantesPage.locator('#tablaDataTables tbody tr').first().innerText().catch(() => '');
+  }
+
   while (pagina <= MAX_PAGINAS) {
-    const { subtotal, filas } = await sumarComprobantesEnPaginaActual(comprobantesPage);
+    const { subtotal, filas, categorizadas } = await sumarComprobantesEnPaginaActual(comprobantesPage);
     total += subtotal;
     filasTotales += filas;
+    categorizadasTotales += categorizadas;
 
     const siguiente = comprobantesPage.locator('a[aria-controls="tablaDataTables"]:has-text("»")').first();
     const contenedorLi = siguiente.locator('xpath=..');
@@ -483,14 +520,34 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
 
     if (estaDeshabilitado) break;
 
+    const fingerprintAntes = await fingerprintPrimeraFila();
     await siguiente.click();
-    // Se espera a que la tabla termine de recargar (por detección), no por tiempo fijo
+
+    // Esperamos a que el contenido de la tabla realmente cambie (no solo que
+    // el overlay de "processing" desaparezca), para no sumar dos veces la
+    // misma página si el cambio de contenido es más lento que el overlay.
     await esperarProcesamientoTabla(comprobantesPage);
-    await comprobantesPage.locator('#tablaDataTables tbody tr').first().waitFor({ state: 'visible', timeout: 60000 }).catch(() => {});
+    const deadline = Date.now() + 60000;
+    let cambio = false;
+    while (Date.now() < deadline) {
+      const fingerprintAhora = await fingerprintPrimeraFila();
+      if (fingerprintAhora && fingerprintAhora !== fingerprintAntes) {
+        cambio = true;
+        break;
+      }
+      await comprobantesPage.waitForTimeout(300);
+    }
+    if (!cambio) {
+      await capturarDebug(comprobantesPage, `pagina-${pagina}-no-cambio-contenido`, debugArr);
+      if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+      throw new Error(
+        `Al pasar a la página siguiente (#${pagina + 1}) la tabla no cambió de contenido en 60s. Revisar screenshot "pagina-${pagina}-no-cambio-contenido" — puede haber quedado sumando la misma página repetida.`
+      );
+    }
     pagina++;
   }
 
-  await capturarDebug(comprobantesPage, `resultado-final-${filasTotales}-filas`, debugArr);
+  await capturarDebug(comprobantesPage, `resultado-final-${filasTotales}-filas-${categorizadasTotales}-categorizadas`, debugArr);
 
   if (filasTotales === 0) {
     // Un total de 0 sin ninguna fila leída es sospechoso: puede ser que el
@@ -501,6 +558,17 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(
       'No se encontró NINGUNA fila de comprobantes en el rango de fechas. Puede ser que el cliente realmente no tenga comprobantes, o que el filtro de fecha/búsqueda haya fallado. Revisar screenshot "resultado-final-0-filas" antes de confiar en este dato.'
+    );
+  }
+
+  if (filasTotales > 0 && categorizadasTotales === 0) {
+    // Hay filas pero ninguna coincidió con Factura/Nota de Débito/Nota de
+    // Crédito: esto es lo que estaba dando un "0" falso. Lo marcamos como
+    // error en vez de reportar 0, para que se revise manualmente el
+    // formato real de la columna "Tipo" en el screenshot de debug.
+    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+    throw new Error(
+      `Se encontraron ${filasTotales} comprobantes pero NINGUNO coincidió con "Factura"/"Nota de Débito"/"Nota de Crédito" en la columna Tipo. Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "resultado-final-${filasTotales}-filas-0-categorizadas" antes de confiar en este dato — probablemente el formato de esa columna cambió.`
     );
   }
 
@@ -551,11 +619,28 @@ async function procesarClientes(clientes, onProgress, rangoFechas) {
     headless: process.env.HEADLESS !== 'false',
   });
 
+  const MAX_INTENTOS = Number(process.env.MAX_INTENTOS_POR_CLIENTE || 2);
   const resultados = [];
   try {
     for (let i = 0; i < clientes.length; i++) {
       const { cuit, clave, numeroCliente } = clientes[i];
-      const resultado = await procesarCliente(browser, cuit, clave, rangoFechas, numeroCliente);
+
+      let resultado;
+      for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+        resultado = await procesarCliente(browser, cuit, clave, rangoFechas, numeroCliente);
+        if (!resultado.error) break;
+
+        console.log(`Cliente ${cuit} — intento ${intento}/${MAX_INTENTOS} falló: ${resultado.error}`);
+        if (intento < MAX_INTENTOS) {
+          // Pausa un poco más larga antes de reintentar, por si fue un
+          // problema transitorio de carga/red.
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+      }
+      if (resultado.error) {
+        resultado.error = `[Falló tras ${MAX_INTENTOS} intentos] ${resultado.error}`;
+      }
+
       resultados.push(resultado);
       if (onProgress) onProgress({ index: i + 1, total: clientes.length, resultado });
 
