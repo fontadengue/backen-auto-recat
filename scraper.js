@@ -236,14 +236,18 @@ async function sumarComprobantesEnPaginaActual(page) {
 }
 
 async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta, debugArr) {
-  const verTodos = await waitForSelectorAnywhere(portalPage, 'a:text-is("Ver todos")', NAV_TIMEOUT, 'visible');
-  if (!verTodos) {
-    await capturarDebug(portalPage, 'link-ver-todos-no-encontrado', debugArr);
-    throw new Error(`No se encontró el link "Ver todos" en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+  const yaEnMisServicios = portalPage.url().includes('/mis-servicios');
+
+  if (!yaEnMisServicios) {
+    const verTodos = await waitForSelectorAnywhere(portalPage, 'a:text-is("Ver todos")', NAV_TIMEOUT, 'visible');
+    if (!verTodos) {
+      await capturarDebug(portalPage, 'link-ver-todos-no-encontrado', debugArr);
+      throw new Error(`No se encontró el link "Ver todos" en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+    }
+    await verTodos.locator.click();
+    await portalPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+    await capturarDebug(portalPage, 'mis-servicios-listado', debugArr);
   }
-  await verTodos.locator.click();
-  await portalPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
-  await capturarDebug(portalPage, 'mis-servicios-listado', debugArr);
 
   const tarjeta = await waitForSelectorAnywhere(
     portalPage,
