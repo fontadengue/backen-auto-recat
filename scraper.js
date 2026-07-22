@@ -85,8 +85,6 @@ async function buscarYAbrirServicio(context, portalPage, nombreServicio, textoPa
   // se actualizó con el filtro que acabamos de tipear.
   await portalPage.waitForTimeout(900);
 
-  if (debugArr) await capturarDebug(portalPage, `buscador-resultados-${textoParaClick}`, debugArr);
-
   // Coincidencia EXACTA de texto (no substring) para no clickear un resultado
   // parecido por error (ej: la descripción de otro servicio menciona la palabra).
   const opcion = portalPage.locator(`p.small.text-muted:text-is("${textoParaClick}")`).first();
@@ -142,7 +140,6 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     'visible'
   );
   if (!botonIngresar) {
-    await capturarDebug(portalPage, 'boton-ingresar-monotributo-no-encontrado', debugArr);
     throw new Error(`No se encontró el botón "Ingresar" de Monotributo en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
   }
 
@@ -157,11 +154,10 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     // le damos un margen para que termine de cargar.
     await portalPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   }
-  await capturarDebug(monoPage, 'monotributo-abierto', debugArr);
 
   if (monoPage === portalPage && portalPage.url() === urlAntesDelClick) {
     throw new Error(
-      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}). Revisar screenshot de debug "monotributo-abierto".`
+      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}).`
     );
   }
 
@@ -169,16 +165,14 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   // (dispara un __doPostBack de ASP.NET, puede recargar la página)
   const botonRecategorizar = await waitForSelectorAnywhere(monoPage, '#bBtn1', NAV_TIMEOUT, 'visible');
   if (!botonRecategorizar) {
-    await capturarDebug(monoPage, 'boton-recategorizarme-no-encontrado', debugArr);
     if (monoPage !== portalPage) await monoPage.close().catch(() => {});
-    throw new Error(`No se encontró el botón #bBtn1 "Recategorizarme" (url: ${monoPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el botón #bBtn1 "Recategorizarme" (url: ${monoPage.url()}).`);
   }
 
   await Promise.all([
     monoPage.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {}),
     botonRecategorizar.locator.click(),
   ]);
-  await capturarDebug(monoPage, 'monotributo-post-recategorizarme', debugArr);
 
   // El id incluye "Mobile": puede estar oculto por CSS en viewport de escritorio.
   // Por eso esperamos que esté "attached" (presente en el DOM) en vez de "visible",
@@ -191,15 +185,15 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   );
 
   if (!encontrado) {
-    await capturarDebug(monoPage, 'monotributo-facturometro-no-encontrado', debugArr);
     if (monoPage !== portalPage) await monoPage.close().catch(() => {});
-    throw new Error(
-      `No se encontró #spanMontoCalculado en Monotributo (url: ${monoPage.url()}). Revisar screenshot de debug.`
-    );
+    throw new Error(`No se encontró #spanMontoCalculado en Monotributo (url: ${monoPage.url()}).`);
   }
 
   const texto = await encontrado.locator.textContent();
   const monto = parseImporteArg(texto);
+
+  // Única captura de debug para este dato: justo al obtener la facturación.
+  await capturarDebug(monoPage, 'facturacion-monotributo-obtenida', debugArr);
 
   if (monoPage !== portalPage) {
     await monoPage.close().catch(() => {});
@@ -248,12 +242,10 @@ async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta
   if (!yaEnMisServicios) {
     const verTodos = await waitForSelectorAnywhere(portalPage, 'a:text-is("Ver todos")', NAV_TIMEOUT, 'visible');
     if (!verTodos) {
-      await capturarDebug(portalPage, 'link-ver-todos-no-encontrado', debugArr);
-      throw new Error(`No se encontró el link "Ver todos" en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+      throw new Error(`No se encontró el link "Ver todos" en el home (url: ${portalPage.url()}).`);
     }
     await verTodos.locator.click();
     await portalPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
-    await capturarDebug(portalPage, 'mis-servicios-listado', debugArr);
   }
 
   const tarjeta = await waitForSelectorAnywhere(
@@ -263,8 +255,7 @@ async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta
     'visible'
   );
   if (!tarjeta) {
-    await capturarDebug(portalPage, `tarjeta-no-encontrada-${tituloTarjeta}`, debugArr);
-    throw new Error(`No se encontró la tarjeta "${tituloTarjeta}" en /mis-servicios (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró la tarjeta "${tituloTarjeta}" en /mis-servicios (url: ${portalPage.url()}).`);
   }
 
   const servicioPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
@@ -287,42 +278,36 @@ async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
 
 async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   const ccmaPage = await abrirServicioDesdeMisServicios(context, portalPage, TITULO_CCMA, debugArr);
-  await capturarDebug(ccmaPage, 'ccma-abierto', debugArr);
 
   // Borrar el período y cargar 01/2004
   const perInput = await waitForSelectorAnywhere(ccmaPage, 'input[name="perdesde2"]', 60000, 'visible');
   if (!perInput) {
-    await capturarDebug(ccmaPage, 'ccma-input-periodo-no-encontrado', debugArr);
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(`No se encontró el input de período (perdesde2) en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el input de período (perdesde2) en CCMA (url: ${ccmaPage.url()}).`);
   }
   await perInput.locator.click();
   await perInput.locator.fill('');
   await perInput.locator.type('01/2004', { delay: 40 });
-  await capturarDebug(ccmaPage, 'ccma-periodo-cargado', debugArr);
 
   // Click en "CALCULO DE DEUDA"
   const botonCalculo = await waitForSelectorAnywhere(ccmaPage, 'input[name="CalDeud"]', 30000, 'visible');
   if (!botonCalculo) {
-    await capturarDebug(ccmaPage, 'ccma-boton-calculo-no-encontrado', debugArr);
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(`No se encontró el botón "CALCULO DE DEUDA" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el botón "CALCULO DE DEUDA" en CCMA (url: ${ccmaPage.url()}).`);
   }
   await botonCalculo.locator.click();
 
   // Esperar a que cargue la página de resultados
   await ccmaPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
   await ccmaPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
-  await capturarDebug(ccmaPage, 'ccma-calculo-deuda-cargado', debugArr);
 
   // Click en "VOLANTE DE PAGO" (siempre se clickea; la detección de si el
   // cliente tiene o no Monotributo se hace en la pantalla siguiente, que es
   // donde realmente aparece la sección "MONOTRIBUTO - OBLIGACIONES")
   const botonVolante = await waitForSelectorAnywhere(ccmaPage, 'input[name="GENVOL"]', 30000, 'visible');
   if (!botonVolante) {
-    await capturarDebug(ccmaPage, 'ccma-boton-volante-no-encontrado', debugArr);
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}).`);
   }
 
   // Puede estar deshabilitado hasta que termine de calcular la deuda;
@@ -333,12 +318,9 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     await ccmaPage.waitForTimeout(500);
     habilitado = await botonVolante.locator.isEnabled().catch(() => false);
   }
-  await capturarDebug(ccmaPage, `ccma-antes-de-click-volante-habilitado-${habilitado}`, debugArr);
   if (!habilitado) {
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(
-      `El botón "VOLANTE DE PAGO" nunca quedó habilitado (url: ${ccmaPage.url()}). Revisar screenshot "ccma-antes-de-click-volante-habilitado-false".`
-    );
+    throw new Error(`El botón "VOLANTE DE PAGO" nunca quedó habilitado (url: ${ccmaPage.url()}).`);
   }
 
   await botonVolante.locator.scrollIntoViewIfNeeded().catch(() => {});
@@ -348,7 +330,6 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
 
   await volantePage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
   await volantePage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
-  await capturarDebug(volantePage, 'ccma-volante-abierto', debugArr);
 
   // Acá es donde realmente hay que detectar si aparece la sección
   // "MONOTRIBUTO - OBLIGACIONES". Si no aparece, el cliente no tiene
@@ -360,7 +341,8 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     'attached'
   );
   if (!filaObligaciones) {
-    await capturarDebug(volantePage, 'ccma-sin-monotributo', debugArr);
+    // Única captura de debug para este dato: al obtener la deuda CCMA (acá, 0).
+    await capturarDebug(volantePage, 'deuda-ccma-obtenida', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
     return 0;
@@ -369,11 +351,10 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   // Seleccionar todos en Monotributo - Obligaciones
   const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
   if (!linkMC) {
-    await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
     throw new Error(
-      `Se detectó la sección "MONOTRIBUTO - OBLIGACIONES" pero no su link "Seleccionar todos" (url: ${volantePage.url()}). Revisar screenshot "ccma-link-mc-no-encontrado".`
+      `Se detectó la sección "MONOTRIBUTO - OBLIGACIONES" pero no su link "Seleccionar todos" (url: ${volantePage.url()}).`
     );
   }
   await linkMC.locator.click();
@@ -387,10 +368,9 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   // Click en "GENERAR VEP O QR"
   const botonVEP = await waitForSelectorAnywhere(volantePage, '#GenerarVEP', 30000, 'visible');
   if (!botonVEP) {
-    await capturarDebug(volantePage, 'ccma-boton-generar-vep-no-encontrado', debugArr);
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
-    throw new Error(`No se encontró el botón "GENERAR VEP O QR" (url: ${volantePage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el botón "GENERAR VEP O QR" (url: ${volantePage.url()}).`);
   }
   await botonVEP.locator.click();
 
@@ -406,11 +386,10 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   );
 
   if (!strongEncontrado) {
-    await capturarDebug(volantePage, 'ccma-importe-no-encontrado', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
     throw new Error(
-      `No se encontró el "Importe Total a pagar" después de Generar VEP (url: ${volantePage.url()}). Revisar screenshot "ccma-importe-no-encontrado" — no confiar en un 0 acá, hay que revisar qué pasó.`
+      `No se encontró el "Importe Total a pagar" después de Generar VEP (url: ${volantePage.url()}). No confiar en un 0 acá, hay que revisar qué pasó.`
     );
   }
 
@@ -427,9 +406,11 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     if (/\d/.test(soloElMonto)) break;
     await volantePage.waitForTimeout(500);
   }
-  await capturarDebug(volantePage, 'ccma-importe-total', debugArr);
 
   const monto = parseImporteArg(texto);
+
+  // Única captura de debug para este dato: al obtener la deuda CCMA (importe real).
+  await capturarDebug(volantePage, 'deuda-ccma-obtenida', debugArr);
 
   if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
   if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
@@ -450,7 +431,6 @@ async function esperarProcesamientoTabla(page, timeout = 20000) {
 
 async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
   const comprobantesPage = await abrirMisComprobantesDesdePortal(context, portalPage, debugArr);
-  await capturarDebug(comprobantesPage, 'mis-comprobantes-cargado', debugArr);
 
   // Click en "Recibidos" — se espera a que el panel aparezca, sin tiempo fijo
   const panelRecibidos = await waitForSelectorAnywhere(
@@ -459,18 +439,16 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     120000
   );
   if (!panelRecibidos) {
-    await capturarDebug(comprobantesPage, 'panel-recibidos-no-encontrado', debugArr);
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
-    throw new Error(`No se encontró el panel "Recibidos" (url: ${comprobantesPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el panel "Recibidos" (url: ${comprobantesPage.url()}).`);
   }
   await panelRecibidos.locator.click();
 
   // Filtro de fecha — se espera a que el input exista, sin tiempo fijo
   const fechaEncontrado = await waitForSelectorAnywhere(comprobantesPage, '#fechaEmision', 60000);
   if (!fechaEncontrado) {
-    await capturarDebug(comprobantesPage, 'filtro-fecha-no-encontrado', debugArr);
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
-    throw new Error(`No se encontró #fechaEmision (url: ${comprobantesPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró #fechaEmision (url: ${comprobantesPage.url()}).`);
   }
   const fechaInput = fechaEncontrado.locator;
   await fechaInput.click();
@@ -486,8 +464,6 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     .click({ timeout: 10000 })
     .catch(() => scopeFecha.locator('body').click({ timeout: 10000 }).catch(() => {}));
 
-  await capturarDebug(comprobantesPage, 'fecha-completada', debugArr);
-
   await comprobantesPage.locator('button.applyBtn.btn-success').click();
   await comprobantesPage.locator('#buscarComprobantes').click();
 
@@ -495,7 +471,6 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   await comprobantesPage.locator('#tablaDataTables').waitFor({ state: 'visible', timeout: 60000 });
   await esperarProcesamientoTabla(comprobantesPage);
   await comprobantesPage.locator('#tablaDataTables tbody tr').first().waitFor({ state: 'visible', timeout: 60000 });
-  await capturarDebug(comprobantesPage, 'tabla-comprobantes-cargada', debugArr);
 
   // Cambiar a 50 resultados por página (ícono de barras -> opción "50")
   const iconoBarras = comprobantesPage.locator('i.fa-bars').first();
@@ -503,21 +478,15 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     await iconoBarras.click();
     const opcion50 = comprobantesPage.locator('li.button-page-length a:text-is("50")').first();
     const dropdownAbierto = await opcion50.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
-    await capturarDebug(comprobantesPage, 'selector-cantidad-abierto', debugArr);
 
     if (dropdownAbierto) {
       await opcion50.click();
       await esperarProcesamientoTabla(comprobantesPage);
       await comprobantesPage.locator('#tablaDataTables tbody tr').first().waitFor({ state: 'visible', timeout: 60000 });
-      await capturarDebug(comprobantesPage, 'tabla-50-aplicado', debugArr);
-    } else {
-      // No se pudo confirmar el dropdown de cantidad; seguimos igual, la
-      // paginación con "»" va a recorrer todas las páginas de todos modos,
-      // solo que con más páginas (más lento, no incorrecto).
-      await capturarDebug(comprobantesPage, 'selector-cantidad-no-confirmado', debugArr);
     }
-  } else {
-    await capturarDebug(comprobantesPage, 'icono-bars-no-encontrado', debugArr);
+    // Si no se pudo confirmar el dropdown de cantidad, seguimos igual: la
+    // paginación con "»" va a recorrer todas las páginas de todos modos,
+    // solo que con más páginas (más lento, no incorrecto).
   }
 
   let total = 0;
@@ -560,16 +529,16 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
       await comprobantesPage.waitForTimeout(300);
     }
     if (!cambio) {
-      await capturarDebug(comprobantesPage, `pagina-${pagina}-no-cambio-contenido`, debugArr);
       if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
       throw new Error(
-        `Al pasar a la página siguiente (#${pagina + 1}) la tabla no cambió de contenido en 60s. Revisar screenshot "pagina-${pagina}-no-cambio-contenido" — puede haber quedado sumando la misma página repetida.`
+        `Al pasar a la página siguiente (#${pagina + 1}) la tabla no cambió de contenido en 60s. Puede haber quedado sumando la misma página repetida.`
       );
     }
     pagina++;
   }
 
-  await capturarDebug(comprobantesPage, `resultado-final-${filasTotales}-filas-${categorizadasTotales}-categorizadas`, debugArr);
+  // Única captura de debug para este dato: al totalizar los comprobantes recibidos.
+  await capturarDebug(comprobantesPage, 'comprobantes-recibidos-totalizado', debugArr);
 
   if (filasTotales === 0) {
     // Un total de 0 sin ninguna fila leída es sospechoso: puede ser que el
@@ -579,7 +548,7 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     // un 0 que parezca un dato confiable sin serlo.
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(
-      'No se encontró NINGUNA fila de comprobantes en el rango de fechas. Puede ser que el cliente realmente no tenga comprobantes, o que el filtro de fecha/búsqueda haya fallado. Revisar screenshot "resultado-final-0-filas" antes de confiar en este dato.'
+      'No se encontró NINGUNA fila de comprobantes en el rango de fechas. Puede ser que el cliente realmente no tenga comprobantes, o que el filtro de fecha/búsqueda haya fallado. Revisar screenshot "comprobantes-recibidos-totalizado" antes de confiar en este dato.'
     );
   }
 
@@ -590,7 +559,7 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     // formato real de la columna "Tipo" en el screenshot de debug.
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(
-      `Se encontraron ${filasTotales} comprobantes pero NINGUNO coincidió con "Factura"/"Nota de Débito"/"Nota de Crédito" en la columna Tipo. Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "resultado-final-${filasTotales}-filas-0-categorizadas" antes de confiar en este dato — probablemente el formato de esa columna cambió.`
+      `Se encontraron ${filasTotales} comprobantes pero NINGUNO coincidió con "Factura"/"Nota de Débito"/"Nota de Crédito" en la columna Tipo. Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "comprobantes-recibidos-totalizado" antes de confiar en este dato — probablemente el formato de esa columna cambió.`
     );
   }
 
@@ -621,7 +590,6 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
 
   try {
     const portalPage = await login(context, cuit, clave);
-    await capturarDebug(portalPage, 'post-login-portal', debug);
 
     resultado.nombre = await obtenerNombreCliente(portalPage);
     resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage, debug);
