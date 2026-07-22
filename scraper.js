@@ -337,32 +337,25 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
     throw new Error(`No se encontró el botón "VOLANTE DE PAGO" en CCMA (url: ${ccmaPage.url()}). Revisar screenshot de debug.`);
   }
 
-  const urlAntesDeVolante = ccmaPage.url();
+  await botonVolante.locator.scrollIntoViewIfNeeded().catch(() => {});
   const volantePage = await clickAndMaybeGetNewPage(context, ccmaPage, async () => {
     await botonVolante.locator.click();
   }, 20000);
 
-  if (volantePage === ccmaPage) {
-    // No se abrió pestaña nueva: puede haber navegado en la misma pestaña,
-    // le damos margen a que termine de cargar antes de decidir si falló.
-    await ccmaPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-  }
   await volantePage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
   await volantePage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await capturarDebug(volantePage, 'ccma-volante-abierto', debugArr);
 
-  if (volantePage === ccmaPage && volantePage.url() === urlAntesDeVolante) {
-    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(
-      `El click en "VOLANTE DE PAGO" no abrió pestaña nueva ni navegó (sigue en ${ccmaPage.url()}). Revisar screenshot "ccma-volante-abierto".`
-    );
-  }
+  // Nota: esta app puede usar frames, por lo que la URL de la pestaña
+  // principal puede no cambiar aunque el click haya funcionado bien.
+  // Por eso la señal de éxito real es encontrar el link "Seleccionar
+  // todos" de Monotributo Obligaciones (ver más abajo), no la URL.
 
   // Seleccionar todos en Monotributo - Obligaciones. Si no aparece este link
   // acá, algo salió mal con la navegación (no es un caso válido de "sin
   // monotributo", porque ya confirmamos antes que existía la fila de
   // obligaciones en la página anterior) — lo tratamos como error, no como 0.
-  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
+  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 60000, 'visible');
   if (!linkMC) {
     await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});

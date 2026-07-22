@@ -94,8 +94,9 @@ function buildZipBuffer(resultados) {
       archive.append(buf, { name: `${safeName} - ${resultado.cuit}.xlsx` });
 
       if (Array.isArray(resultado.debug)) {
+        const carpetaDebug = resultado.numeroCliente || resultado.cuit;
         resultado.debug.forEach((shot, i) => {
-          const nombreArchivo = `debug/${resultado.cuit}/${String(i).padStart(2, '0')}-${shot.label}.png`;
+          const nombreArchivo = `debug/${carpetaDebug}/${String(i).padStart(2, '0')}-${shot.label}.png`;
           archive.append(shot.buffer, { name: nombreArchivo });
         });
       }
