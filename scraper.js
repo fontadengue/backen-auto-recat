@@ -315,21 +315,9 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   await ccmaPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await capturarDebug(ccmaPage, 'ccma-calculo-deuda-cargado', debugArr);
 
-  // Si no aparece la sección de Monotributo - Obligaciones, el cliente no
-  // tiene deuda de monotributo: deuda CCMA = 0, sin marcar error.
-  const filaObligaciones = await waitForSelectorAnywhere(
-    ccmaPage,
-    'tr:has-text("MONOTRIBUTO - OBLIGACIONES")',
-    20000,
-    'attached'
-  );
-  if (!filaObligaciones) {
-    await capturarDebug(ccmaPage, 'ccma-sin-monotributo', debugArr);
-    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    return 0;
-  }
-
-  // Click en "VOLANTE DE PAGO"
+  // Click en "VOLANTE DE PAGO" (siempre se clickea; la detección de si el
+  // cliente tiene o no Monotributo se hace en la pantalla siguiente, que es
+  // donde realmente aparece la sección "MONOTRIBUTO - OBLIGACIONES")
   const botonVolante = await waitForSelectorAnywhere(ccmaPage, 'input[name="GENVOL"]', 30000, 'visible');
   if (!botonVolante) {
     await capturarDebug(ccmaPage, 'ccma-boton-volante-no-encontrado', debugArr);
@@ -362,22 +350,30 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   await volantePage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await capturarDebug(volantePage, 'ccma-volante-abierto', debugArr);
 
-  // Nota: esta app puede usar frames, por lo que la URL de la pestaña
-  // principal puede no cambiar aunque el click haya funcionado bien.
-  // Por eso la señal de éxito real es encontrar el link "Seleccionar
-  // todos" de Monotributo Obligaciones (ver más abajo), no la URL.
+  // Acá es donde realmente hay que detectar si aparece la sección
+  // "MONOTRIBUTO - OBLIGACIONES". Si no aparece, el cliente no tiene
+  // deuda de monotributo: deuda CCMA = 0, sin marcar error.
+  const filaObligaciones = await waitForSelectorAnywhere(
+    volantePage,
+    'tr:has-text("MONOTRIBUTO - OBLIGACIONES")',
+    20000,
+    'attached'
+  );
+  if (!filaObligaciones) {
+    await capturarDebug(volantePage, 'ccma-sin-monotributo', debugArr);
+    if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
+    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
+    return 0;
+  }
 
-  // Seleccionar todos en Monotributo - Obligaciones. Si no aparece este link
-  // acá, algo salió mal con la navegación (no es un caso válido de "sin
-  // monotributo", porque ya confirmamos antes que existía la fila de
-  // obligaciones en la página anterior) — lo tratamos como error, no como 0.
-  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 60000, 'visible');
+  // Seleccionar todos en Monotributo - Obligaciones
+  const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
   if (!linkMC) {
     await capturarDebug(volantePage, 'ccma-link-mc-no-encontrado', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
     throw new Error(
-      `No se encontró el link "Seleccionar todos" de Monotributo Obligaciones en el volante de pago (url: ${volantePage.url()}). Revisar screenshot "ccma-link-mc-no-encontrado".`
+      `Se detectó la sección "MONOTRIBUTO - OBLIGACIONES" pero no su link "Seleccionar todos" (url: ${volantePage.url()}). Revisar screenshot "ccma-link-mc-no-encontrado".`
     );
   }
   await linkMC.locator.click();
