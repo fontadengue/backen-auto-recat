@@ -394,16 +394,18 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
   }
   await botonVEP.locator.click();
 
-  // Leer el importe total a pagar
-  const importeEncontrado = await waitForSelectorAnywhere(
+  // Leer el importe total a pagar. Apuntamos directo al <strong> con la
+  // etiqueta, y leemos SOLO el texto de su padre inmediato (no un div
+  // ancestro grande, que puede arrastrar toda la tabla de arriba —
+  // incluido el CUIT del contribuyente— y arruinar el parseo del monto).
+  const strongEncontrado = await waitForSelectorAnywhere(
     volantePage,
-    'div:has(strong:has-text("Importe Total a pagar"))',
+    'strong:has-text("Importe Total a pagar")',
     60000,
-    'attached-nonempty'
+    'attached'
   );
-  await capturarDebug(volantePage, 'ccma-importe-total', debugArr);
 
-  if (!importeEncontrado) {
+  if (!strongEncontrado) {
     await capturarDebug(volantePage, 'ccma-importe-no-encontrado', debugArr);
     if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
     if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
@@ -411,7 +413,22 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr) {
       `No se encontró el "Importe Total a pagar" después de Generar VEP (url: ${volantePage.url()}). Revisar screenshot "ccma-importe-no-encontrado" — no confiar en un 0 acá, hay que revisar qué pasó.`
     );
   }
-  const texto = await importeEncontrado.locator.textContent();
+
+  // El monto suele estar como texto hermano después del <strong>, dentro del
+  // mismo padre inmediato. Esperamos a que ese padre tenga contenido
+  // numérico real (no solo la etiqueta) antes de leerlo, por si carga con
+  // un pequeño delay después de Generar VEP.
+  const padreImporte = strongEncontrado.locator.locator('xpath=..');
+  let texto = '';
+  const deadlineImporte = Date.now() + 30000;
+  while (Date.now() < deadlineImporte) {
+    texto = await padreImporte.textContent().catch(() => '');
+    const soloElMonto = texto.replace(/Importe Total a pagar:?/i, '');
+    if (/\d/.test(soloElMonto)) break;
+    await volantePage.waitForTimeout(500);
+  }
+  await capturarDebug(volantePage, 'ccma-importe-total', debugArr);
+
   const monto = parseImporteArg(texto);
 
   if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
