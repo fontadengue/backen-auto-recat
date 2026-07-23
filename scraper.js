@@ -3,7 +3,7 @@ const { chromium } = require('playwright');
 const LOGIN_URL = 'https://auth.afip.gob.ar/contribuyente_/login.xhtml';
 const PORTAL_URL_FRAGMENT = 'portalcf.cloud.afip.gob.ar';
 const DEFAULT_DATE_RANGE = process.env.RANGO_FECHAS || '01/07/2025 - 30/06/2026';
-const NAV_TIMEOUT = 45000;
+const NAV_TIMEOUT = 90000;
 
 function parseImporteArg(texto) {
   if (!texto) return 0;
@@ -223,6 +223,7 @@ async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta
     }
     await verTodos.locator.click();
     await portalPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+    await portalPage.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
   }
 
   const tarjeta = await waitForSelectorAnywhere(
@@ -234,15 +235,43 @@ async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta
   if (!tarjeta) {
     throw new Error(`No se encontró la tarjeta "${tituloTarjeta}" en /mis-servicios (url: ${portalPage.url()}).`);
   }
+  await tarjeta.locator.scrollIntoViewIfNeeded().catch(() => {});
 
-  const servicioPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
-    await tarjeta.locator.click();
-  });
+  // El click en la tarjeta puede tardar en abrir pestaña/navegar bajo carga
+  // (AFIP responde más lento con muchos clientes seguidos). Reintentamos el
+  // click varias veces, verificando de verdad que algo cambió, antes de
+  // darlo por perdido — no seguimos de largo si no confirmamos la apertura.
+  const MAX_INTENTOS_CLICK = 3;
+  let servicioPage = portalPage;
+  const urlAntesDelClick = portalPage.url();
+
+  for (let intento = 1; intento <= MAX_INTENTOS_CLICK; intento++) {
+    servicioPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
+      await tarjeta.locator.click();
+    }, 30000);
+
+    if (servicioPage !== portalPage) break; // se abrió pestaña nueva, listo
+
+    // No se abrió pestaña nueva: puede haber navegado en la misma pestaña,
+    // le damos margen a que cargue antes de decidir si hubo que reintentar.
+    await portalPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+    if (portalPage.url() !== urlAntesDelClick) break; // navegó en la misma pestaña, listo
+
+    if (intento < MAX_INTENTOS_CLICK) {
+      await portalPage.waitForTimeout(2000);
+    }
+  }
+
+  if (servicioPage === portalPage && portalPage.url() === urlAntesDelClick) {
+    throw new Error(
+      `El click en la tarjeta "${tituloTarjeta}" no abrió pestaña nueva ni navegó después de ${MAX_INTENTOS_CLICK} intentos (sigue en ${portalPage.url()}).`
+    );
+  }
 
   // Estas apps suelen tardar en cargar del todo; esperamos a que la red se
   // calme (detección), no un tiempo fijo arbitrario.
-  await servicioPage.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
-  await servicioPage.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+  await servicioPage.waitForLoadState('domcontentloaded', { timeout: 90000 }).catch(() => {});
+  await servicioPage.waitForLoadState('networkidle', { timeout: 90000 }).catch(() => {});
 
   return servicioPage;
 }
@@ -476,8 +505,21 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     return comprobantesPage.locator('#tablaDataTables tbody tr').first().innerText().catch(() => '');
   }
 
+  async function sumarPaginaConReintento() {
+    let resultado = await sumarComprobantesEnPaginaActual(comprobantesPage);
+    if (resultado.filas > 0 && resultado.categorizadas === 0) {
+      // Sospechoso: hay filas pero ninguna categorizada. Puede ser que el
+      // contenido todavía no terminó de renderizar (bajo carga tarda más).
+      // Le damos un margen extra y volvemos a leer una vez antes de aceptar
+      // este resultado como definitivo.
+      await comprobantesPage.waitForTimeout(3000);
+      resultado = await sumarComprobantesEnPaginaActual(comprobantesPage);
+    }
+    return resultado;
+  }
+
   while (pagina <= MAX_PAGINAS) {
-    const { subtotal, filas, categorizadas } = await sumarComprobantesEnPaginaActual(comprobantesPage);
+    const { subtotal, filas, categorizadas } = await sumarPaginaConReintento();
     total += subtotal;
     filasTotales += filas;
     categorizadasTotales += categorizadas;
@@ -586,7 +628,7 @@ async function procesarClientes(clientes, onProgress, rangoFechas) {
     headless: process.env.HEADLESS !== 'false',
   });
 
-  const MAX_INTENTOS = Number(process.env.MAX_INTENTOS_POR_CLIENTE || 2);
+  const MAX_INTENTOS = Number(process.env.MAX_INTENTOS_POR_CLIENTE || 3);
   const resultados = [];
   try {
     for (let i = 0; i < clientes.length; i++) {
@@ -612,7 +654,7 @@ async function procesarClientes(clientes, onProgress, rangoFechas) {
       if (onProgress) onProgress({ index: i + 1, total: clientes.length, resultado });
 
       // Pausa entre clientes para no parecer un bot agresivo
-      const delay = Number(process.env.DELAY_MS || 3000);
+      const delay = Number(process.env.DELAY_MS || 8000);
       if (delay > 0 && i < clientes.length - 1) {
         await new Promise((r) => setTimeout(r, delay));
       }
