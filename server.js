@@ -116,9 +116,9 @@ app.get('/download/:jobId', checkApiKey, (req, res) => {
 
 // Limpieza de jobs viejos (más de 2 horas) para no acumular memoria
 setInterval(() => {
-  const dosHoras = 2 * 60 * 60 * 1000;
+  const seisHoras = 6 * 60 * 60 * 1000;
   for (const [id, job] of jobs.entries()) {
-    if (Date.now() - job.createdAt > dosHoras) jobs.delete(id);
+    if (Date.now() - job.createdAt > seisHoras) jobs.delete(id);
   }
 }, 15 * 60 * 1000);
 
