@@ -22,6 +22,7 @@ async function clickAndMaybeGetNewPage(context, page, clickFn, timeout = 8000) {
   await clickFn();
   const newPage = await popupPromise;
   if (newPage) {
+    newPage.on('dialog', (dialog) => dialog.accept().catch(() => {}));
     await newPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
     return newPage;
   }
@@ -99,6 +100,7 @@ async function buscarYAbrirServicio(context, portalPage, nombreServicio, textoPa
 
 async function login(context, cuit, clave) {
   const page = await context.newPage();
+  page.on('dialog', (dialog) => dialog.accept().catch(() => {}));
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
 
   await page.locator('#F1\\:username').fill(cuit);
@@ -156,8 +158,9 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   }
 
   if (monoPage === portalPage && portalPage.url() === urlAntesDelClick) {
+    await capturarDebug(portalPage, 'error-ingresar-monotributo-no-navego', debugArr);
     throw new Error(
-      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}).`
+      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}). Revisar screenshot "error-ingresar-monotributo-no-navego".`
     );
   }
 
