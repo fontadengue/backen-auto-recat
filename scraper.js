@@ -132,40 +132,11 @@ async function obtenerNombreCliente(portalPage) {
 }
 
 async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
-  // Ya no se busca "Monotributo" por el buscador: hay un botón "Ingresar"
-  // directo en el home del portal (tarjeta de "Recategorización" bajo
-  // Novedades y alertas) que abre la pestaña del sistema de Monotributo.
-  // Usamos proximidad de texto (:near) en vez de clases CSS puntuales,
-  // porque el rediseño del portal (AFIP -> ARCA) cambia el markup/clases
-  // pero el texto "Recategorización" + botón "Ingresar" se mantiene junto.
-  const botonIngresar = await waitForSelectorAnywhere(
-    portalPage,
-    'button:text-is("Ingresar"):near(:text("Recategorización"), 400)',
-    NAV_TIMEOUT,
-    'visible'
-  );
-  if (!botonIngresar) {
-    throw new Error(`No se encontró el botón "Ingresar" de Monotributo/Recategorización en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
-  }
-
-  await botonIngresar.locator.scrollIntoViewIfNeeded().catch(() => {});
-  const urlAntesDelClick = portalPage.url();
-  const monoPage = await clickAndMaybeGetNewPage(context, portalPage, async () => {
-    await botonIngresar.locator.click();
-  }, 20000);
-
-  if (monoPage === portalPage) {
-    // No se abrió pestaña nueva: puede haber navegado en la misma pestaña,
-    // le damos un margen para que termine de cargar.
-    await portalPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  }
-
-  if (monoPage === portalPage && portalPage.url() === urlAntesDelClick) {
-    await capturarDebug(portalPage, 'error-ingresar-monotributo-no-navego', debugArr);
-    throw new Error(
-      `El click en "Ingresar" (Recategorización) no abrió pestaña nueva ni navegó (sigue en ${portalPage.url()}). Revisar screenshot "error-ingresar-monotributo-no-navego".`
-    );
-  }
+  // Igual que Mis Comprobantes y CCMA: entra por "Ver todos" -> tarjeta
+  // "Monotributo", en vez del botón "Ingresar" de la card de
+  // Recategorización (que cambió de estructura con el rediseño AFIP -> ARCA
+  // y dejó de ser confiable).
+  const monoPage = await abrirServicioDesdeMisServicios(context, portalPage, 'Monotributo', debugArr);
 
   // Antes de que aparezca el monto hay que clickear "Recategorizarme"
   // (dispara un __doPostBack de ASP.NET, puede recargar la página)
