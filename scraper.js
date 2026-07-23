@@ -162,6 +162,8 @@ async function intentarObtenerFacturacionMonotributo(context, portalPage, debugA
   );
 
   let monto;
+  let comprobantesRecibidosDesdeMonotributo = null;
+
   if (encontrado) {
     const texto = await encontrado.locator.textContent();
     monto = parseImporteArg(texto);
@@ -182,6 +184,20 @@ async function intentarObtenerFacturacionMonotributo(context, portalPage, debugA
     }
     const textoRespaldo = await filaRespaldo.locator.textContent();
     monto = parseImporteArg(textoRespaldo);
+
+    // Esta misma tabla también trae "Comprobantes electrónicos recibidos":
+    // si está, la aprovechamos y nos ahorramos todo el flujo separado de
+    // Mis Comprobantes para este cliente.
+    const filaRecibidos = await waitForSelectorAnywhere(
+      monoPage,
+      'tr:has-text("Comprobantes electrónicos recibidos")',
+      10000,
+      'attached-nonempty'
+    );
+    if (filaRecibidos) {
+      const textoRecibidos = await filaRecibidos.locator.textContent();
+      comprobantesRecibidosDesdeMonotributo = parseImporteArg(textoRecibidos);
+    }
   }
 
   // Única captura de debug para este dato: justo al obtener la facturación.
@@ -190,7 +206,7 @@ async function intentarObtenerFacturacionMonotributo(context, portalPage, debugA
   if (monoPage !== portalPage) {
     await monoPage.close().catch(() => {});
   }
-  return monto;
+  return { monto, comprobantesRecibidosDesdeMonotributo };
 }
 
 async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
@@ -671,8 +687,20 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
     const portalPage = await login(context, cuit, clave);
 
     resultado.nombre = await obtenerNombreCliente(portalPage);
-    resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage, debug);
-    resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
+    const facturacionResultado = await obtenerFacturacionMonotributo(context, portalPage, debug);
+    resultado.facturacionMonotributo = facturacionResultado.monto;
+
+    if (
+      facturacionResultado.comprobantesRecibidosDesdeMonotributo !== null &&
+      facturacionResultado.comprobantesRecibidosDesdeMonotributo !== undefined
+    ) {
+      // Ya conseguimos el dato de comprobantes recibidos desde la propia
+      // pantalla de Monotributo (método de respaldo): nos ahorramos todo
+      // el flujo separado de "Mis Comprobantes" y vamos directo a CCMA.
+      resultado.comprobantesRecibidos = facturacionResultado.comprobantesRecibidosDesdeMonotributo;
+    } else {
+      resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
+    }
     resultado.deudaCCMA = await obtenerDeudaCCMA(context, portalPage, debug, cuit);
   } catch (err) {
     resultado.error = err.message || String(err);
