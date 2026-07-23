@@ -133,16 +133,19 @@ async function obtenerNombreCliente(portalPage) {
 
 async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   // Ya no se busca "Monotributo" por el buscador: hay un botón "Ingresar"
-  // directo en el home del portal (tarjeta de Monotributo) que abre la
-  // pestaña del sistema de Monotributo.
+  // directo en el home del portal (tarjeta de "Recategorización" bajo
+  // Novedades y alertas) que abre la pestaña del sistema de Monotributo.
+  // Usamos proximidad de texto (:near) en vez de clases CSS puntuales,
+  // porque el rediseño del portal (AFIP -> ARCA) cambia el markup/clases
+  // pero el texto "Recategorización" + botón "Ingresar" se mantiene junto.
   const botonIngresar = await waitForSelectorAnywhere(
     portalPage,
-    'div.media:has(h4.title:text-is("Recategorización")) button.btn-primary.btn-breakline:text-is("Ingresar")',
+    'button:text-is("Ingresar"):near(:text("Recategorización"), 400)',
     NAV_TIMEOUT,
     'visible'
   );
   if (!botonIngresar) {
-    throw new Error(`No se encontró el botón "Ingresar" de Monotributo en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
+    throw new Error(`No se encontró el botón "Ingresar" de Monotributo/Recategorización en el home (url: ${portalPage.url()}). Revisar screenshot de debug.`);
   }
 
   await botonIngresar.locator.scrollIntoViewIfNeeded().catch(() => {});
