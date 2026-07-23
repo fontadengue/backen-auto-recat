@@ -136,7 +136,7 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   // "Monotributo", en vez del botón "Ingresar" de la card de
   // Recategorización (que cambió de estructura con el rediseño AFIP -> ARCA
   // y dejó de ser confiable).
-  const monoPage = await abrirServicioDesdeMisServicios(context, portalPage, 'Monotributo', debugArr);
+  const monoPage = await abrirServicioDesdeMisServicios(context, portalPage, 'MONOTRIBUTO', debugArr);
 
   // Antes de que aparezca el monto hay que clickear "Recategorizarme"
   // (dispara un __doPostBack de ASP.NET, puede recargar la página)
