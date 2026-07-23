@@ -131,7 +131,7 @@ async function obtenerNombreCliente(portalPage) {
   return nombre.trim();
 }
 
-async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
+async function intentarObtenerFacturacionMonotributo(context, portalPage, debugArr) {
   // Igual que Mis Comprobantes y CCMA: entra por "Ver todos" -> tarjeta
   // "Monotributo", en vez del botón "Ingresar" de la card de
   // Recategorización (que cambió de estructura con el rediseño AFIP -> ARCA
@@ -151,9 +151,9 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     botonRecategorizar.locator.click(),
   ]);
 
-  // El id incluye "Mobile": puede estar oculto por CSS en viewport de escritorio.
-  // Por eso esperamos que esté "attached" (presente en el DOM) en vez de "visible",
-  // y leemos con textContent, que funciona aunque el elemento esté oculto.
+  // Método principal: #spanMontoCalculado. El id incluye "Mobile": puede
+  // estar oculto por CSS en viewport de escritorio, por eso esperamos
+  // "attached" en vez de "visible", y leemos con textContent.
   const encontrado = await waitForSelectorAnywhere(
     monoPage,
     '#spanMontoCalculado',
@@ -161,13 +161,28 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     'attached-nonempty'
   );
 
-  if (!encontrado) {
-    if (monoPage !== portalPage) await monoPage.close().catch(() => {});
-    throw new Error(`No se encontró #spanMontoCalculado en Monotributo (url: ${monoPage.url()}).`);
+  let monto;
+  if (encontrado) {
+    const texto = await encontrado.locator.textContent();
+    monto = parseImporteArg(texto);
+  } else {
+    // Método de respaldo: tabla "Ingresos en el período", fila de Facturas
+    // electrónicas emitidas (#trFeEmitida).
+    const filaRespaldo = await waitForSelectorAnywhere(
+      monoPage,
+      '#trFeEmitida',
+      30000,
+      'attached-nonempty'
+    );
+    if (!filaRespaldo) {
+      if (monoPage !== portalPage) await monoPage.close().catch(() => {});
+      throw new Error(
+        `No se encontró #spanMontoCalculado ni el respaldo #trFeEmitida en Monotributo (url: ${monoPage.url()}).`
+      );
+    }
+    const textoRespaldo = await filaRespaldo.locator.textContent();
+    monto = parseImporteArg(textoRespaldo);
   }
-
-  const texto = await encontrado.locator.textContent();
-  const monto = parseImporteArg(texto);
 
   // Única captura de debug para este dato: justo al obtener la facturación.
   await capturarDebug(monoPage, 'facturacion-monotributo-obtenida', debugArr);
@@ -176,6 +191,32 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     await monoPage.close().catch(() => {});
   }
   return monto;
+}
+
+async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
+  const MAX_INTENTOS_MONOTRIBUTO = 2;
+  let ultimoError;
+
+  for (let intento = 1; intento <= MAX_INTENTOS_MONOTRIBUTO; intento++) {
+    try {
+      return await intentarObtenerFacturacionMonotributo(context, portalPage, debugArr);
+    } catch (err) {
+      ultimoError = err;
+      if (intento < MAX_INTENTOS_MONOTRIBUTO) {
+        // No detectó el dato ni por el método principal ni por el de
+        // respaldo: volvemos a la página principal del portal y repetimos
+        // todo el flujo de Monotributo una vez más antes de darlo por fallido.
+        console.log(`Monotributo — intento ${intento} falló (${err.message}), reintentando desde la página principal...`);
+        await portalPage.goto(`https://${PORTAL_URL_FRAGMENT}/portal/app/`, {
+          waitUntil: 'domcontentloaded',
+          timeout: NAV_TIMEOUT,
+        }).catch(() => {});
+        await portalPage.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+      }
+    }
+  }
+
+  throw ultimoError;
 }
 
 async function sumarComprobantesEnPaginaActual(page) {
@@ -282,8 +323,27 @@ async function abrirMisComprobantesDesdePortal(context, portalPage, debugArr) {
   return abrirServicioDesdeMisServicios(context, portalPage, 'MIS COMPROBANTES', debugArr);
 }
 
-async function obtenerDeudaCCMA(context, portalPage, debugArr) {
+async function obtenerDeudaCCMA(context, portalPage, debugArr, cuit) {
   const ccmaPage = await abrirServicioDesdeMisServicios(context, portalPage, TITULO_CCMA, debugArr);
+
+  // En algunos casos CCMA pide elegir a qué CUIT representar (cuando la
+  // clave fiscal tiene más de un CUIT relacionado). Si aparece ese selector,
+  // elegimos el CUIT que corresponde a este cliente puntual.
+  const selectCuit = await waitForSelectorAnywhere(ccmaPage, 'select[name="selectCuit"]', 10000, 'visible');
+  if (selectCuit) {
+    await selectCuit.locator.selectOption(cuit).catch(async () => {
+      // Por si el value no matchea exacto (espacios, ceros, etc.), probamos
+      // seleccionar por el texto visible de la opción.
+      await selectCuit.locator.selectOption({ label: cuit }).catch(() => {});
+    });
+
+    const botonElegirCuit = await waitForSelectorAnywhere(ccmaPage, 'input[name="btnEnvia"]', 10000, 'visible');
+    if (botonElegirCuit) {
+      await botonElegirCuit.locator.click();
+      await ccmaPage.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+      await ccmaPage.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+    }
+  }
 
   // Borrar el período y cargar 01/2004
   const perInput = await waitForSelectorAnywhere(ccmaPage, 'input[name="perdesde2"]', 60000, 'visible');
@@ -613,7 +673,7 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
     resultado.nombre = await obtenerNombreCliente(portalPage);
     resultado.facturacionMonotributo = await obtenerFacturacionMonotributo(context, portalPage, debug);
     resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
-    resultado.deudaCCMA = await obtenerDeudaCCMA(context, portalPage, debug);
+    resultado.deudaCCMA = await obtenerDeudaCCMA(context, portalPage, debug, cuit);
   } catch (err) {
     resultado.error = err.message || String(err);
   } finally {
