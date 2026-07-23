@@ -246,6 +246,29 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
   throw ultimoError;
 }
 
+function extraerImporteConTipoCambio(importeTexto) {
+  const lineas = importeTexto
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const primeraLinea = lineas[0] || '';
+  const esDolar = /USD/i.test(primeraLinea);
+
+  let importe = parseImporteArg(primeraLinea);
+  let tc = null;
+
+  if (esDolar) {
+    const lineaTC = lineas.find((l) => /TC:/i.test(l)) || importeTexto;
+    const tcMatch = lineaTC.match(/TC:\s*([\d.,]+)/i);
+    if (tcMatch) {
+      tc = parseImporteArg(tcMatch[1]);
+      if (tc) importe = importe * tc;
+    }
+  }
+
+  return { importe, esDolar, tc };
+}
+
 async function sumarComprobantesEnPaginaActual(page) {
   // Ajustar el selector de filas según la tabla real (#tablaDataTables)
   const filas = page.locator('#tablaDataTables tbody tr');
@@ -258,9 +281,11 @@ async function sumarComprobantesEnPaginaActual(page) {
     const fila = filas.nth(i);
     const celdas = fila.locator('td');
     const tipoTexto = (await celdas.nth(1).innerText().catch(() => '')).toLowerCase();
-    // El importe suele estar en una celda con class="alignRight" y span.moneda
+    // El importe suele estar en una celda con class="alignRight" y span.moneda.
+    // Si es en dólares (USD), hay que multiplicar por el tipo de cambio (TC)
+    // que aparece debajo, en la misma celda.
     const importeTexto = await fila.locator('td.alignRight').first().innerText().catch(() => '');
-    const importe = parseImporteArg(importeTexto);
+    const { importe, esDolar, tc } = extraerImporteConTipoCambio(importeTexto);
     if (importeTexto.trim() && importe === 0 && !/^[\s$.,0]*$/.test(importeTexto)) {
       importeNoParseado++;
     }
@@ -275,7 +300,8 @@ async function sumarComprobantesEnPaginaActual(page) {
       signo = 1;
       categorizadas++;
     }
-    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importeTexto="${importeTexto.trim()}" importe=${importe} signo=${signo}`);
+    const notaDolar = esDolar ? ` [USD, TC=${tc}]` : '';
+    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importeTexto="${importeTexto.trim().replace(/\n/g, ' | ')}" importe=${importe}${notaDolar} signo=${signo}`);
   }
   console.log(`  subtotal de la página: ${acumulado} (${total} filas, ${categorizadas} categorizadas, ${importeNoParseado} importes sin parsear bien)`);
   return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado };
