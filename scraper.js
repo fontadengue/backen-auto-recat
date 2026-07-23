@@ -232,6 +232,17 @@ async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
     }
   }
 
+  // Si el error final es específicamente "no se encontró el dato en ningún
+  // lado de la página" (llegamos bien a Monotributo, pero ni el método
+  // principal ni el de respaldo detectaron nada) — no un error de
+  // navegación/click — colocamos 0 con una nota para verificar a mano, en
+  // vez de marcar todo el cliente como fallido.
+  const noHabiaDatoEnLaPagina = ultimoError && ultimoError.message.includes('ni el respaldo #trFeEmitida');
+  if (noHabiaDatoEnLaPagina) {
+    console.log('Monotributo — no se encontró el dato en ningún lado de la página tras los reintentos; se coloca 0 (verificar).');
+    return { monto: '0 (verificar)', comprobantesRecibidosDesdeMonotributo: null };
+  }
+
   throw ultimoError;
 }
 
@@ -432,19 +443,27 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr, cuit) {
 
   // Seleccionar todos en Monotributo - Obligaciones
   const linkMC = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MC\')"]', 30000, 'visible');
-  if (!linkMC) {
-    if (volantePage !== ccmaPage) await volantePage.close().catch(() => {});
-    if (ccmaPage !== portalPage) await ccmaPage.close().catch(() => {});
-    throw new Error(
-      `Se detectó la sección "MONOTRIBUTO - OBLIGACIONES" pero no su link "Seleccionar todos" (url: ${volantePage.url()}).`
-    );
+  if (linkMC) {
+    await linkMC.locator.click();
   }
-  await linkMC.locator.click();
+  // Verificamos que realmente haya quedado todo tildado; si el link no
+  // existía o el click no marcó todo, marcamos casilla por casilla como
+  // flujo de respaldo (cada fila de MONOTRIBUTO - OBLIGACIONES usa
+  // name="check_mon_capital").
+  const obligacionesOk = await confirmarTodosMarcados(volantePage, 'check_mon_capital');
+  if (!obligacionesOk) {
+    await marcarTodosLosCheckboxes(volantePage, 'check_mon_capital');
+  }
 
   // Seleccionar todos en Monotributo - Intereses (puede no existir si no hay intereses)
   const linkMI = await waitForSelectorAnywhere(volantePage, 'a[href*="select_todos(\'MI\')"]', 15000, 'visible');
   if (linkMI) {
     await linkMI.locator.click();
+  }
+  // Mismo respaldo para MONOTRIBUTO - INTERESES (name="check_mon_interes")
+  const interesesOk = await confirmarTodosMarcados(volantePage, 'check_mon_interes');
+  if (!interesesOk) {
+    await marcarTodosLosCheckboxes(volantePage, 'check_mon_interes');
   }
 
   // Click en "GENERAR VEP O QR"
@@ -455,6 +474,7 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr, cuit) {
     throw new Error(`No se encontró el botón "GENERAR VEP O QR" (url: ${volantePage.url()}).`);
   }
   await botonVEP.locator.click();
+
 
   // Leer el importe total a pagar. Apuntamos directo al <strong> con la
   // etiqueta, y leemos SOLO el texto de su padre inmediato (no un div
@@ -500,6 +520,30 @@ async function obtenerDeudaCCMA(context, portalPage, debugArr, cuit) {
   return monto;
 }
 
+async function marcarTodosLosCheckboxes(page, name) {
+  const checkboxes = page.locator(`input[type="checkbox"][name="${name}"]`);
+  const total = await checkboxes.count();
+  for (let i = 0; i < total; i++) {
+    const casilla = checkboxes.nth(i);
+    const yaMarcada = await casilla.isChecked().catch(() => false);
+    if (!yaMarcada) {
+      await casilla.check({ force: true }).catch(() => {});
+    }
+  }
+  return total;
+}
+
+async function confirmarTodosMarcados(page, name) {
+  const checkboxes = page.locator(`input[type="checkbox"][name="${name}"]`);
+  const total = await checkboxes.count();
+  if (total === 0) return true;
+  for (let i = 0; i < total; i++) {
+    const marcada = await checkboxes.nth(i).isChecked().catch(() => false);
+    if (!marcada) return false;
+  }
+  return true;
+}
+
 async function esperarProcesamientoTabla(page, timeout = 20000) {
   // DataTables muestra un overlay "Processing..." mientras recarga la tabla;
   // si existe, esperamos a que se oculte. Si no existe, no hacemos nada más
@@ -511,15 +555,64 @@ async function esperarProcesamientoTabla(page, timeout = 20000) {
   }
 }
 
-async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr) {
+function formatCuitConGuiones(cuit) {
+  const digits = String(cuit).replace(/\D/g, '');
+  if (digits.length !== 11) return cuit;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 10)}-${digits.slice(10)}`;
+}
+
+async function elegirPersonaSiCorresponde(page, cuit, debugArr) {
+  const cuitConGuiones = formatCuitConGuiones(cuit);
+  const tituloPersona = await waitForSelectorAnywhere(
+    page,
+    'h1:has-text("Elegí una persona para ingresar")',
+    10000,
+    'visible'
+  );
+  if (!tituloPersona) return false;
+
+  const tarjetaPersona = await waitForSelectorAnywhere(
+    page,
+    `div.media-body:has(p:text-is("${cuitConGuiones}"))`,
+    15000,
+    'visible'
+  );
+  if (!tarjetaPersona) {
+    throw new Error(
+      `Apareció "Elegí una persona para ingresar" pero no se encontró la tarjeta con CUIT ${cuitConGuiones} (url: ${page.url()}).`
+    );
+  }
+  await tarjetaPersona.locator.click();
+  await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  return true;
+}
+
+async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debugArr, cuit) {
   const comprobantesPage = await abrirMisComprobantesDesdePortal(context, portalPage, debugArr);
 
   // Click en "Recibidos" — se espera a que el panel aparezca, sin tiempo fijo
-  const panelRecibidos = await waitForSelectorAnywhere(
+  let panelRecibidos = await waitForSelectorAnywhere(
     comprobantesPage,
     'div.panel-body:has(h3:text-is("Recibidos"))',
     120000
   );
+
+  if (!panelRecibidos) {
+    // Recuperación: puede haber saltado la pantalla "Elegí una persona para
+    // ingresar" (cuando la clave fiscal representa a más de una persona).
+    // Solo la manejamos acá, como respaldo ante el error de no encontrar
+    // el panel "Recibidos".
+    const eligioPersona = await elegirPersonaSiCorresponde(comprobantesPage, cuit, debugArr);
+    if (eligioPersona) {
+      panelRecibidos = await waitForSelectorAnywhere(
+        comprobantesPage,
+        'div.panel-body:has(h3:text-is("Recibidos"))',
+        60000
+      );
+    }
+  }
+
   if (!panelRecibidos) {
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(`No se encontró el panel "Recibidos" (url: ${comprobantesPage.url()}).`);
@@ -699,7 +792,7 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
       // el flujo separado de "Mis Comprobantes" y vamos directo a CCMA.
       resultado.comprobantesRecibidos = facturacionResultado.comprobantesRecibidosDesdeMonotributo;
     } else {
-      resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug);
+      resultado.comprobantesRecibidos = await obtenerComprobantesRecibidos(context, portalPage, rangoFechas, debug, cuit);
     }
     resultado.deudaCCMA = await obtenerDeudaCCMA(context, portalPage, debug, cuit);
   } catch (err) {
