@@ -831,15 +831,32 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
 }
 
 async function procesarClientes(clientes, onProgress, rangoFechas) {
-  const browser = await chromium.launch({
-    headless: process.env.HEADLESS !== 'false',
-  });
+  const RECICLAR_BROWSER_CADA = Number(process.env.RECICLAR_BROWSER_CADA || 6);
+
+  async function lanzarBrowser() {
+    return chromium.launch({
+      headless: process.env.HEADLESS !== 'false',
+      args: ['--disable-dev-shm-usage'], // evita que /dev/shm limitado tire OOM en contenedores chicos
+    });
+  }
+
+  let browser = await lanzarBrowser();
 
   const MAX_INTENTOS = Number(process.env.MAX_INTENTOS_POR_CLIENTE || 3);
   const resultados = [];
   try {
     for (let i = 0; i < clientes.length; i++) {
       const { cuit, clave, numeroCliente } = clientes[i];
+
+      // Reciclamos el navegador cada tanto: Chromium acumula memoria en
+      // procesos largos con muchas pestañas/contextos, y en lotes grandes
+      // esto puede tirar abajo el contenedor (Railway lo reinicia, y el
+      // frontend ve un "failed to fetch" / DNS por unos segundos).
+      if (i > 0 && i % RECICLAR_BROWSER_CADA === 0) {
+        console.log(`Reciclando navegador tras ${i} clientes procesados...`);
+        await browser.close().catch(() => {});
+        browser = await lanzarBrowser();
+      }
 
       let resultado;
       for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
