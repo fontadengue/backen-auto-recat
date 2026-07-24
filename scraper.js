@@ -276,7 +276,6 @@ async function sumarComprobantesEnPaginaActual(page) {
   let acumulado = 0;
   let categorizadas = 0;
   let importeNoParseado = 0;
-  const tiposNoReconocidos = {}; // { "5 - recibo x": { cantidad, totalImporte } }
 
   for (let i = 0; i < total; i++) {
     const fila = filas.nth(i);
@@ -291,30 +290,25 @@ async function sumarComprobantesEnPaginaActual(page) {
       importeNoParseado++;
     }
 
+    // Regla simple: TODO lo que no sea Nota de Crédito, suma. Nota de
+    // Crédito resta. No hace falta distinguir Factura de Nota de Débito.
     let signo = 0;
-    if (tipoTexto.includes('nota de cr')) {
-      acumulado -= importe;
-      signo = -1;
-      categorizadas++;
-    } else if (tipoTexto.includes('factura') || tipoTexto.includes('nota de d')) {
-      acumulado += importe;
-      signo = 1;
-      categorizadas++;
-    } else if (tipoTexto) {
-      // Tipo de comprobante que NO reconocemos como Factura/N.Débito/N.Crédito.
-      // No lo sumamos ni restamos, pero lo registramos para que quede a la
-      // vista en vez de desaparecer silenciosamente del total.
-      if (!tiposNoReconocidos[tipoTexto]) {
-        tiposNoReconocidos[tipoTexto] = { cantidad: 0, totalImporte: 0 };
+    if (tipoTexto) {
+      if (tipoTexto.includes('nota de cr')) {
+        acumulado -= importe;
+        signo = -1;
+      } else {
+        acumulado += importe;
+        signo = 1;
       }
-      tiposNoReconocidos[tipoTexto].cantidad++;
-      tiposNoReconocidos[tipoTexto].totalImporte += importe;
+      categorizadas++;
     }
+
     const notaDolar = esDolar ? ` [USD, TC=${tc}]` : '';
     console.log(`  fila ${i}: tipo="${tipoTexto}" importeTexto="${importeTexto.trim().replace(/\n/g, ' | ')}" importe=${importe}${notaDolar} signo=${signo}`);
   }
   console.log(`  subtotal de la página: ${acumulado} (${total} filas, ${categorizadas} categorizadas, ${importeNoParseado} importes sin parsear bien)`);
-  return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado, tiposNoReconocidos };
+  return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado };
 }
 
 async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta, debugArr) {
@@ -723,21 +717,11 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     return resultado;
   }
 
-  const tiposNoReconocidosTotal = {};
-
   while (pagina <= MAX_PAGINAS) {
-    const { subtotal, filas, categorizadas, tiposNoReconocidos } = await sumarPaginaConReintento();
+    const { subtotal, filas, categorizadas } = await sumarPaginaConReintento();
     total += subtotal;
     filasTotales += filas;
     categorizadasTotales += categorizadas;
-
-    for (const [tipo, datos] of Object.entries(tiposNoReconocidos || {})) {
-      if (!tiposNoReconocidosTotal[tipo]) {
-        tiposNoReconocidosTotal[tipo] = { cantidad: 0, totalImporte: 0 };
-      }
-      tiposNoReconocidosTotal[tipo].cantidad += datos.cantidad;
-      tiposNoReconocidosTotal[tipo].totalImporte += datos.totalImporte;
-    }
 
     const siguiente = comprobantesPage.locator('a[aria-controls="tablaDataTables"]:has-text("»")').first();
     const contenedorLi = siguiente.locator('xpath=..');
@@ -787,31 +771,12 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
   }
 
   if (filasTotales > 0 && categorizadasTotales === 0) {
-    // Hay filas pero ninguna coincidió con Factura/Nota de Débito/Nota de
-    // Crédito: esto es lo que estaba dando un "0" falso. Lo marcamos como
-    // error en vez de reportar 0, para que se revise manualmente el
-    // formato real de la columna "Tipo" en el screenshot de debug.
+    // Hay filas pero en NINGUNA se pudo leer texto en la columna "Tipo"
+    // (columna vacía o selector desalineado). Lo marcamos como error para
+    // revisión manual en vez de reportar un total en 0 que parezca válido.
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(
-      `Se encontraron ${filasTotales} comprobantes pero NINGUNO coincidió con "Factura"/"Nota de Débito"/"Nota de Crédito" en la columna Tipo. Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "comprobantes-recibidos-totalizado" antes de confiar en este dato — probablemente el formato de esa columna cambió.`
-    );
-  }
-
-  // Si hay tipos de comprobante que NO reconocemos y que además tienen un
-  // importe distinto de cero, el total podría estar incompleto sin que nos
-  // demos cuenta. Preferimos frenar acá con un error explícito (que se ve
-  // en el excel y en los logs) antes que entregar un número que parezca
-  // confiable pero le falte algo.
-  const tiposConImporte = Object.entries(tiposNoReconocidosTotal).filter(
-    ([, datos]) => Math.abs(datos.totalImporte) > 0.009
-  );
-  if (tiposConImporte.length > 0) {
-    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
-    const detalle = tiposConImporte
-      .map(([tipo, datos]) => `"${tipo}" (${datos.cantidad} fila/s, importe total ${datos.totalImporte.toFixed(2)})`)
-      .join('; ');
-    throw new Error(
-      `Se encontraron tipos de comprobante NO reconocidos (no son Factura/N.Débito/N.Crédito) con importe distinto de 0, que por eso NO se sumaron ni restaron: ${detalle}. Revisar si corresponde incluirlos en la lógica de suma antes de confiar en el total. Screenshot "comprobantes-recibidos-totalizado".`
+      `Se encontraron ${filasTotales} comprobantes pero en NINGUNO se pudo leer el texto de la columna "Tipo" (columna vacía o selector desalineado). Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "comprobantes-recibidos-totalizado" antes de confiar en este dato.`
     );
   }
 
