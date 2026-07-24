@@ -276,14 +276,15 @@ async function sumarComprobantesEnPaginaActual(page) {
   let acumulado = 0;
   let categorizadas = 0;
   let importeNoParseado = 0;
+  const tiposNoReconocidos = {}; // { "5 - recibo x": { cantidad, totalImporte } }
 
   for (let i = 0; i < total; i++) {
     const fila = filas.nth(i);
     const celdas = fila.locator('td');
-    const tipoTexto = (await celdas.nth(1).innerText().catch(() => '')).toLowerCase();
+    const tipoTexto = (await celdas.nth(1).innerText().catch(() => '')).toLowerCase().trim();
     // El importe suele estar en una celda con class="alignRight" y span.moneda.
-    // Si es en dólares (USD), hay que multiplicar por el tipo de cambio (TC)
-    // que aparece debajo, en la misma celda.
+    // Si la moneda no es "$" (ej: USD), hay que multiplicar por el tipo de
+    // cambio (TC) que aparece debajo, en la misma celda.
     const importeTexto = await fila.locator('td.alignRight').first().innerText().catch(() => '');
     const { importe, esDolar, tc } = extraerImporteConTipoCambio(importeTexto);
     if (importeTexto.trim() && importe === 0 && !/^[\s$.,0]*$/.test(importeTexto)) {
@@ -299,12 +300,21 @@ async function sumarComprobantesEnPaginaActual(page) {
       acumulado += importe;
       signo = 1;
       categorizadas++;
+    } else if (tipoTexto) {
+      // Tipo de comprobante que NO reconocemos como Factura/N.Débito/N.Crédito.
+      // No lo sumamos ni restamos, pero lo registramos para que quede a la
+      // vista en vez de desaparecer silenciosamente del total.
+      if (!tiposNoReconocidos[tipoTexto]) {
+        tiposNoReconocidos[tipoTexto] = { cantidad: 0, totalImporte: 0 };
+      }
+      tiposNoReconocidos[tipoTexto].cantidad++;
+      tiposNoReconocidos[tipoTexto].totalImporte += importe;
     }
     const notaDolar = esDolar ? ` [USD, TC=${tc}]` : '';
-    console.log(`  fila ${i}: tipo="${tipoTexto.trim()}" importeTexto="${importeTexto.trim().replace(/\n/g, ' | ')}" importe=${importe}${notaDolar} signo=${signo}`);
+    console.log(`  fila ${i}: tipo="${tipoTexto}" importeTexto="${importeTexto.trim().replace(/\n/g, ' | ')}" importe=${importe}${notaDolar} signo=${signo}`);
   }
   console.log(`  subtotal de la página: ${acumulado} (${total} filas, ${categorizadas} categorizadas, ${importeNoParseado} importes sin parsear bien)`);
-  return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado };
+  return { subtotal: acumulado, filas: total, categorizadas, importeNoParseado, tiposNoReconocidos };
 }
 
 async function abrirServicioDesdeMisServicios(context, portalPage, tituloTarjeta, debugArr) {
@@ -713,11 +723,21 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     return resultado;
   }
 
+  const tiposNoReconocidosTotal = {};
+
   while (pagina <= MAX_PAGINAS) {
-    const { subtotal, filas, categorizadas } = await sumarPaginaConReintento();
+    const { subtotal, filas, categorizadas, tiposNoReconocidos } = await sumarPaginaConReintento();
     total += subtotal;
     filasTotales += filas;
     categorizadasTotales += categorizadas;
+
+    for (const [tipo, datos] of Object.entries(tiposNoReconocidos || {})) {
+      if (!tiposNoReconocidosTotal[tipo]) {
+        tiposNoReconocidosTotal[tipo] = { cantidad: 0, totalImporte: 0 };
+      }
+      tiposNoReconocidosTotal[tipo].cantidad += datos.cantidad;
+      tiposNoReconocidosTotal[tipo].totalImporte += datos.totalImporte;
+    }
 
     const siguiente = comprobantesPage.locator('a[aria-controls="tablaDataTables"]:has-text("»")').first();
     const contenedorLi = siguiente.locator('xpath=..');
@@ -774,6 +794,24 @@ async function obtenerComprobantesRecibidos(context, portalPage, rangoFechas, de
     if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
     throw new Error(
       `Se encontraron ${filasTotales} comprobantes pero NINGUNO coincidió con "Factura"/"Nota de Débito"/"Nota de Crédito" en la columna Tipo. Revisar los logs de Railway (texto exacto de cada fila) y el screenshot "comprobantes-recibidos-totalizado" antes de confiar en este dato — probablemente el formato de esa columna cambió.`
+    );
+  }
+
+  // Si hay tipos de comprobante que NO reconocemos y que además tienen un
+  // importe distinto de cero, el total podría estar incompleto sin que nos
+  // demos cuenta. Preferimos frenar acá con un error explícito (que se ve
+  // en el excel y en los logs) antes que entregar un número que parezca
+  // confiable pero le falte algo.
+  const tiposConImporte = Object.entries(tiposNoReconocidosTotal).filter(
+    ([, datos]) => Math.abs(datos.totalImporte) > 0.009
+  );
+  if (tiposConImporte.length > 0) {
+    if (comprobantesPage !== portalPage) await comprobantesPage.close().catch(() => {});
+    const detalle = tiposConImporte
+      .map(([tipo, datos]) => `"${tipo}" (${datos.cantidad} fila/s, importe total ${datos.totalImporte.toFixed(2)})`)
+      .join('; ');
+    throw new Error(
+      `Se encontraron tipos de comprobante NO reconocidos (no son Factura/N.Débito/N.Crédito) con importe distinto de 0, que por eso NO se sumaron ni restaron: ${detalle}. Revisar si corresponde incluirlos en la lógica de suma antes de confiar en el total. Screenshot "comprobantes-recibidos-totalizado".`
     );
   }
 
