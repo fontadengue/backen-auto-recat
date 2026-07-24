@@ -131,12 +131,17 @@ async function obtenerNombreCliente(portalPage) {
   return nombre.trim();
 }
 
-async function intentarObtenerFacturacionMonotributo(context, portalPage, debugArr) {
+async function intentarObtenerFacturacionMonotributo(context, portalPage, debugArr, cuit) {
   // Igual que Mis Comprobantes y CCMA: entra por "Ver todos" -> tarjeta
   // "Monotributo", en vez del botón "Ingresar" de la card de
   // Recategorización (que cambió de estructura con el rediseño AFIP -> ARCA
   // y dejó de ser confiable).
   const monoPage = await abrirServicioDesdeMisServicios(context, portalPage, 'MONOTRIBUTO', debugArr);
+
+  // Si la clave fiscal representa a más de una persona, puede aparecer
+  // "Elegí una persona para ingresar" antes de llegar a Monotributo.
+  // Elegimos la tarjeta cuyo CUIT coincide con el del excel.
+  await elegirPersonaSiCorresponde(monoPage, cuit, debugArr, 4000);
 
   // Antes de que aparezca el monto hay que clickear "Recategorizarme"
   // (dispara un __doPostBack de ASP.NET, puede recargar la página)
@@ -209,13 +214,13 @@ async function intentarObtenerFacturacionMonotributo(context, portalPage, debugA
   return { monto, comprobantesRecibidosDesdeMonotributo };
 }
 
-async function obtenerFacturacionMonotributo(context, portalPage, debugArr) {
+async function obtenerFacturacionMonotributo(context, portalPage, debugArr, cuit) {
   const MAX_INTENTOS_MONOTRIBUTO = 2;
   let ultimoError;
 
   for (let intento = 1; intento <= MAX_INTENTOS_MONOTRIBUTO; intento++) {
     try {
-      return await intentarObtenerFacturacionMonotributo(context, portalPage, debugArr);
+      return await intentarObtenerFacturacionMonotributo(context, portalPage, debugArr, cuit);
     } catch (err) {
       ultimoError = err;
       if (intento < MAX_INTENTOS_MONOTRIBUTO) {
@@ -591,12 +596,12 @@ function formatCuitConGuiones(cuit) {
   return `${digits.slice(0, 2)}-${digits.slice(2, 10)}-${digits.slice(10)}`;
 }
 
-async function elegirPersonaSiCorresponde(page, cuit, debugArr) {
+async function elegirPersonaSiCorresponde(page, cuit, debugArr, timeoutDeteccion = 10000) {
   const cuitConGuiones = formatCuitConGuiones(cuit);
   const tituloPersona = await waitForSelectorAnywhere(
     page,
     'h1:has-text("Elegí una persona para ingresar")',
-    10000,
+    timeoutDeteccion,
     'visible'
   );
   if (!tituloPersona) return false;
@@ -809,7 +814,7 @@ async function procesarCliente(browser, cuit, clave, rangoFechas = DEFAULT_DATE_
     const portalPage = await login(context, cuit, clave);
 
     resultado.nombre = await obtenerNombreCliente(portalPage);
-    const facturacionResultado = await obtenerFacturacionMonotributo(context, portalPage, debug);
+    const facturacionResultado = await obtenerFacturacionMonotributo(context, portalPage, debug, cuit);
     resultado.facturacionMonotributo = facturacionResultado.monto;
 
     if (
